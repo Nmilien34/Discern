@@ -47,13 +47,20 @@ function candidateDirectories(): string[] {
   return [
     path.resolve(process.cwd(), "prompts"),
     path.resolve(process.cwd(), "..", "prompts"),
-    // The working directory ITSELF, last.
+    // The working directory itself, and its PARENT.
     //
     // Render Secret Files take a bare filename — the dashboard rejects any "/"
-    // — so they land at the project root rather than in a prompts/ subfolder.
-    // Checking cwd means that works with no PROMPTS_DIR and no hardcoded
-    // /opt/render/... path, which would silently rot if Render moved it.
+    // — so the files land at the repository root. And `npm start -w
+    // @discern/backend` sets cwd to the WORKSPACE directory, not the repo root,
+    // so on Render the files sit one level ABOVE cwd:
+    //
+    //   /opt/render/project/src/abigail-system.txt      <- the files
+    //   /opt/render/project/src/discern-backend/        <- cwd
+    //
+    // Both are checked rather than hardcoding /opt/render/..., which would rot
+    // silently the day Render moved it.
     process.cwd(),
+    path.resolve(process.cwd(), ".."),
   ];
 }
 
@@ -95,8 +102,9 @@ function load(filename: string): string {
       "  config/prompts.ts. Supply them one of two ways:",
       "",
       "    local     put them in ./prompts (they are gitignored, not generated)",
-      "    Render    add each as a Secret File named prompts/<file>, or set",
-      "              PROMPTS_DIR to wherever you mounted them",
+      "    Render    add each as a Secret File with a BARE filename (the",
+      "              dashboard rejects a \"/\"). They land at the repo root,",
+      "              which is checked. PROMPTS_DIR only if mounted elsewhere.",
       "",
       "  If you have lost them, they cannot be regenerated from this repository.",
     ].join("\n"),
