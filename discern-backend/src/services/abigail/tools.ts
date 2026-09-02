@@ -35,6 +35,14 @@ export interface ToolContext {
   conversationId: Types.ObjectId;
   /** References already given to this person, so she does not repeat herself. */
   passagesAlreadyGiven: string[];
+  /**
+   * Where a search reports its own model spend.
+   *
+   * A search costs a HyDE rewrite and a query embedding on top of whatever the
+   * reasoning model spends calling it. Both were missing from every cost figure
+   * until 2026-09-02.
+   */
+  onUsage?: (usage: { model: string; tokensIn: number; tokensOut: number }) => void;
 }
 
 export interface ToolInvocation {
@@ -222,7 +230,7 @@ export async function executeTool(
     case "get_author_context":
       return getAuthorContextTool(args);
     case "search_hymns":
-      return searchHymnsTool(args);
+      return searchHymnsTool(args, context);
     case "offer_carrying":
       return offerCarryingTool(args, context);
     case "note_stage":
@@ -250,6 +258,8 @@ async function searchScriptureTool(
     // embedding. Enrichment is deliberately NOT in this path (DEFERRED.md).
     rewriteQuery: true,
     useEnriched: false,
+    // Every search reports its HyDE and embedding spend up to the turn.
+    ...(context.onUsage ? { onUsage: context.onUsage } : {}),
   };
 
   let results = await searchScripture(args.query ?? "", {
@@ -270,7 +280,7 @@ async function searchScriptureTool(
       { query: args.query, stageSlug: args.stageSlug },
       "filtered search returned nothing; retrying without the filter",
     );
-    results = await searchScripture(args.query ?? "", baseOptions);
+    results = await searchScripture(args.query ?? "", { ...baseOptions, onUsage: context.onUsage });
   }
 
   const references = results.map((r) => r.passage.reference);
@@ -447,8 +457,14 @@ async function getAuthorContextTool(args: RawArgs): Promise<ToolInvocation> {
   };
 }
 
-async function searchHymnsTool(args: RawArgs): Promise<ToolInvocation> {
-  const hymns = await searchHymns(args.query ?? "", { limit: 3 });
+async function searchHymnsTool(
+  args: RawArgs,
+  context: ToolContext,
+): Promise<ToolInvocation> {
+  const hymns = await searchHymns(args.query ?? "", {
+    limit: 3,
+    ...(context.onUsage ? { onUsage: context.onUsage } : {}),
+  });
 
   return {
     name: "search_hymns",

@@ -367,6 +367,14 @@ function mergeEntitlement(survivor: UserDocument, absorbed: UserDocument): void 
   ];
 }
 
+/**
+ * Link or merge an account.
+ *
+ * `input.accountId` MUST come from a verified provider token — see
+ * services/users/identity-verification.ts. This function does not verify
+ * anything itself; it is the caller's job, and the only caller is the route,
+ * which verifies first. Never call this with a value taken from a request body.
+ */
 export async function linkAccount(
   currentUserId: string,
   input: { provider: LinkProvider; accountId: string; email?: string },

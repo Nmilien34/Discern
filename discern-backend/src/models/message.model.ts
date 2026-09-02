@@ -33,8 +33,20 @@ export interface MessageDocument extends Document<Types.ObjectId> {
   citations: MessageCitation[];
   toolCalls: MessageToolCall[];
   modelUsed: string | null;
+  /** Turn total, summed across every model. Kept for existing indexes. */
   tokensIn: number;
   tokensOut: number;
+  /**
+   * PER-MODEL breakdown of this turn.
+   *
+   * `modelUsed` names only the model that WROTE the reply, while tokensIn and
+   * tokensOut sum every call in the turn — safety on nano, premise on mini, the
+   * reasoning rounds, and retrieval's HyDE and embeddings. Pricing the sum at
+   * the reply model's rate inflated gpt-5 spend badly and made "what did this
+   * user cost me" unanswerable from stored data. This array is what makes it
+   * answerable; the two scalars above stay as a total.
+   */
+  costs: { model: string; tokensIn: number; tokensOut: number }[];
   latencyMs: number;
   /** True when the safety gate answered instead of the reasoning path. */
   safetyIntercepted: boolean;
@@ -72,6 +84,20 @@ const messageSchema = new Schema<MessageDocument>(
     modelUsed: { type: String, default: null },
     tokensIn: { type: Number, required: true, default: 0 },
     tokensOut: { type: Number, required: true, default: 0 },
+    costs: {
+      type: [
+        new Schema(
+          {
+            model: { type: String, required: true },
+            tokensIn: { type: Number, required: true, default: 0 },
+            tokensOut: { type: Number, required: true, default: 0 },
+          },
+          { _id: false },
+        ),
+      ],
+      required: true,
+      default: [],
+    },
     latencyMs: { type: Number, required: true, default: 0 },
     safetyIntercepted: { type: Boolean, required: true, default: false },
   },

@@ -16,9 +16,9 @@
 
 import OpenAI from "openai";
 
-import { env } from "../../config/env";
 import { embeddingDimensions, models } from "../../config/models";
 import { logger } from "../../lib/logger";
+import { openaiFor } from "../../lib/openai-client";
 
 /**
  * Inputs per request.
@@ -37,7 +37,7 @@ let client: OpenAI | null = null;
 
 function getClient(): OpenAI {
   if (!client) {
-    client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
+    client = openaiFor("embedding");
   }
   return client;
 }
@@ -146,15 +146,29 @@ export async function* embedInBatches(
 }
 
 /** Embeds a single query. Used by retrieval, one call per search. */
-export async function embedQuery(query: string): Promise<number[]> {
-  const { vectors } = await embedBatch([query]);
+export interface QueryEmbedding {
+  vector: number[];
+  model: string;
+  tokens: number;
+}
+
+/**
+ * Embed one query, REPORTING what it cost.
+ *
+ * `embedBatch` has always returned a token count; this wrapper discarded it, so
+ * query embeddings were invisible to cost reporting in the same way HyDE was.
+ * Small per call, but it happens on every search and the point of the exercise
+ * is that the number is TRUE, not that it is large.
+ */
+export async function embedQuery(query: string): Promise<QueryEmbedding> {
+  const { vectors, tokens } = await embedBatch([query]);
   const vector = vectors[0];
 
   if (!vector) {
     throw new Error("Embedding request returned no vector for the query.");
   }
 
-  return vector;
+  return { vector, model: models.embedding, tokens };
 }
 
 /**

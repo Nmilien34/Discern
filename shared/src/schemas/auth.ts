@@ -57,14 +57,24 @@ export const SUBSCRIPTION_PRODUCTS = [
  * Attaches a durable account identity to the CURRENT device user, or merges the
  * current device user into the account that already owns that identity.
  *
- * `accountId` is the provider's stable subject (Apple/Google `sub`). Email alone
- * is not identity — people change it, and two providers can report the same one.
+ * THE CLIENT DOES NOT NAME THE ACCOUNT. It presents the provider's signed
+ * identity token and the nonce it used; the server verifies the signature,
+ * issuer, audience, expiry and nonce, and takes the account id from the
+ * verified `sub`.
+ *
+ * `accountId` and `email` were request fields until 2026-09-02 and were trusted
+ * as sent. An Apple `sub` is not a secret, so that let anyone who knew one be
+ * merged into that person's account — and the merge moves carryings,
+ * conversations, the seed ledger and memory. There is now no field in which a
+ * caller can express which account to link to.
  */
 export const linkAccountRequestSchema = z
   .object({
     provider: z.enum(LINK_PROVIDERS),
-    accountId: z.string().min(1).max(255),
-    email: z.string().email().max(320).optional(),
+    /** The provider's signed JWT. Verified server-side; never decoded blindly. */
+    identityToken: z.string().min(1).max(8192),
+    /** The nonce this sign-in used, bound into the token by the provider. */
+    nonce: z.string().min(1).max(512),
   })
   .strict();
 

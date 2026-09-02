@@ -36,6 +36,10 @@ process.env.S3_BUCKET = "discern-audio-test";
 process.env.REVENUECAT_WEBHOOK_SECRET = "test-revenuecat-webhook-secret";
 process.env.REVENUECAT_SECRET_API_KEY = "test-revenuecat-api-key";
 
+// The audience Sign in with Apple tokens are checked against. Verification
+// refuses to run without it, so tests that exercise the happy path need one.
+process.env.APPLE_BUNDLE_ID = "com.boltzman.discern";
+
 // Real 32 bytes so the strength validation is exercised rather than bypassed.
 process.env.JWT_SECRET =
   "9f2c41ab7e6d0538c1a4be97f20d6c8b35ea71904dc26f8b1e5a3097cb42de60";

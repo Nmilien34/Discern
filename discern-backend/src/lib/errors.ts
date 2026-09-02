@@ -79,6 +79,23 @@ export class ConflictError extends AppError {
   }
 }
 
+/**
+ * A turn could not be completed because something upstream failed.
+ *
+ * 503 and not 500: an OpenAI timeout, rate limit or outage is a "come back in a
+ * moment", not a bug in the request. The client should offer to resend rather
+ * than showing an error state, and nothing about the conversation is persisted
+ * — the turn simply did not happen.
+ */
+export class UpstreamUnavailableError extends AppError {
+  public constructor(
+    message = "Abigail could not answer just now. Please send that again.",
+    details?: unknown,
+  ) {
+    super("upstream_unavailable", message, 503, details);
+  }
+}
+
 export class RateLimitedError extends AppError {
   public constructor(message = "Too many requests", details?: unknown) {
     super("rate_limited", message, 429, details);

@@ -126,7 +126,7 @@ async function main(): Promise<void> {
     const [rewritten, hydeMs] = await timed(() => rewriteQueryForRetrieval(query));
     hyde.push(hydeMs);
 
-    const [, embedMs] = await timed(() => embedQuery(rewritten));
+    const [, embedMs] = await timed(() => embedQuery(rewritten.text));
     embed.push(embedMs);
 
     // The whole call, so the Atlas + fusion + hydration remainder can be got by

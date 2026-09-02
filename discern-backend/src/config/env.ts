@@ -333,6 +333,17 @@ const envSchema = z.object({
     .transform((v) => v === "true"),
 
   /**
+   * Bundle id of the iOS app, used as the `aud` claim when verifying a Sign in
+   * with Apple identity token.
+   *
+   * Optional here and REQUIRED AT USE: linking refuses to run without it rather
+   * than verifying a token with no audience check, because a real Apple token
+   * issued to any other app would otherwise be accepted as an identity here.
+   * See services/users/identity-verification.ts.
+   */
+  APPLE_BUNDLE_ID: z.string().min(1).optional(),
+
+  /**
    * Directory holding Abigail's prompt files, which are NOT in the repository.
    *
    * Unset is normal: config/prompts.ts then looks in ./prompts relative to the

@@ -147,6 +147,17 @@ export interface SearchOptions {
    * matters more than recall.
    */
   rewriteQuery?: boolean;
+  /**
+   * Where this search's model spend is reported.
+   *
+   * A search makes up to two paid calls of its own — the HyDE rewrite and the
+   * query embedding — and both were invisible to TurnResult.costs until
+   * 2026-09-02 because they happen two layers below the pipeline. An explicit
+   * sink rather than a return-shape change: every caller that does not care
+   * about cost (scripts, the compare harness) is untouched, and the one that
+   * does passes a collector.
+   */
+  onUsage?: (usage: { model: string; tokensIn: number; tokensOut: number }) => void;
 }
 
 export interface ScoredPassage {
@@ -508,12 +519,25 @@ export async function searchScripture(
   // HyDE runs BEFORE embedding and only affects the vector half. The keyword
   // half keeps the user's actual words: rewritten text is hypothetical, and
   // keyword-matching invented prose would retrieve on words nobody said.
-  const embedText =
-    options.rewriteQuery ?? true
-      ? await rewriteQueryForRetrieval(query)
-      : query;
+  let embedText = query;
 
-  const queryVector = await embedQuery(embedText);
+  if (options.rewriteQuery ?? true) {
+    const rewrite = await rewriteQueryForRetrieval(query);
+    embedText = rewrite.text;
+    options.onUsage?.({
+      model: rewrite.model,
+      tokensIn: rewrite.tokensIn,
+      tokensOut: rewrite.tokensOut,
+    });
+  }
+
+  const embedded = await embedQuery(embedText);
+  const queryVector = embedded.vector;
+  options.onUsage?.({
+    model: embedded.model,
+    tokensIn: embedded.tokens,
+    tokensOut: 0,
+  });
 
   const [vectorIds, keywordIds] = await Promise.all([
     vectorSearchIds(
@@ -573,7 +597,7 @@ export interface ScoredHymn {
 /** ARCHITECTURE.md §7: `search_hymns(query)`. */
 export async function searchHymns(
   query: string,
-  options: { limit?: number; stageSlug?: string } = {},
+  options: Pick<SearchOptions, "limit" | "stageSlug" | "onUsage"> = {},
 ): Promise<ScoredHymn[]> {
   const limit = options.limit ?? 5;
   const filter = buildFilter({ ...(options.stageSlug ? { stageSlug: options.stageSlug } : {}) });
@@ -582,7 +606,13 @@ export async function searchHymns(
   const total = await HymnModel.estimatedDocumentCount();
   if (total === 0) return [];
 
-  const queryVector = await embedQuery(query);
+  const embeddedHymnQuery = await embedQuery(query);
+  const queryVector = embeddedHymnQuery.vector;
+  options.onUsage?.({
+    model: embeddedHymnQuery.model,
+    tokensIn: embeddedHymnQuery.tokens,
+    tokensOut: 0,
+  });
 
   const [vectorIds, keywordIds] = await Promise.all([
     vectorSearchIds(queryVector, filter, perSide, HymnModel, HYMN_INDEX),

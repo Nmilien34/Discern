@@ -14,7 +14,6 @@
 import OpenAI from "openai";
 import type { Types } from "mongoose";
 
-import { env } from "../../config/env";
 import { models } from "../../config/models";
 import { logger } from "../../lib/logger";
 import {
@@ -24,8 +23,10 @@ import {
   UserMemoryModel,
   UserStageModel,
 } from "../../models";
+import { UpstreamUnavailableError } from "../../lib/errors";
 import { recordSeedEvent } from "../journey/seed.service";
 import { classifyForSafety } from "../safety/classifier";
+import { openaiFor } from "../../lib/openai-client";
 import {
   checkGrounding,
   GROUNDING_FALLBACK,
@@ -65,11 +66,27 @@ export interface TurnResult {
   fellBack: boolean;
   /** Reasoning rounds actually spent. Each one is a model call. */
   reasoningRounds: number;
+  /**
+   * Per-round breakdown, so "the turn took 113 seconds" can be attributed.
+   *
+   * `modelMs` is wall-clock inside the OpenAI call. `toolMs` is retrieval —
+   * which is itself mostly HyDE, another model call. `localMs` is everything
+   * this process did on its own CPU: parsing tool results, assembling context,
+   * fusion. That last one is the number that decides whether a bigger instance
+   * would help, and it was not measured before 2026-09-02.
+   */
+  roundTimings: {
+    round: number;
+    modelMs: number;
+    toolMs: number;
+    localMs: number;
+    tools: string[];
+  }[];
 }
 
 let client: OpenAI | null = null;
 const getClient = (): OpenAI =>
-  (client ??= new OpenAI({ apiKey: env.OPENAI_API_KEY }));
+  (client ??= openaiFor("reasoning"));
 
 /**
  * Which model answers this turn (ARCHITECTURE.md §7 model routing).
@@ -102,6 +119,38 @@ export async function runTurn(
   const startedAt = Date.now();
   const costs: TurnCost[] = [];
 
+  try {
+    return await runTurnInner(userId, conversationId, userMessage, startedAt, costs);
+  } catch (error) {
+    // NOTHING IS PERSISTED ON THIS PATH. persistTurn is called by the route
+    // AFTER this returns, so a throw here means the turn did not happen at all
+    // — no half-written conversation, no user message hanging with no reply.
+    //
+    // Rethrown as 503 rather than escaping as a 500: an OpenAI timeout or
+    // outage is "try again", and the app should offer to resend rather than
+    // showing a failure. What the person typed is still in their compose box.
+    logger.error(
+      {
+        err: error instanceof Error ? error.message : error,
+        userId: String(userId),
+        conversationId: String(conversationId),
+        elapsedMs: Date.now() - startedAt,
+        costsSoFar: costs.length,
+      },
+      "abigail turn failed",
+    );
+
+    throw new UpstreamUnavailableError();
+  }
+}
+
+async function runTurnInner(
+  userId: Types.ObjectId,
+  conversationId: Types.ObjectId,
+  userMessage: string,
+  startedAt: number,
+  costs: TurnCost[],
+): Promise<TurnResult> {
   // ---- 1. SAFETY GATE ------------------------------------------------------
   const safety = await classifyForSafety(userMessage);
   costs.push({
@@ -127,6 +176,7 @@ export async function runTurn(
     return {
       reply: safety.response ?? "",
       safetyIntercepted: true,
+      roundTimings: [],
       safetyClassification: safety.classification,
       premiseVerdict: "not-run",
       premise: "",
@@ -189,6 +239,11 @@ export async function runTurn(
     userId,
     conversationId,
     passagesAlreadyGiven: passagesGiven.map((p) => p.ref),
+    // Retrieval's own spend lands in the same array as everything else, so the
+    // turn's cost is the turn's cost rather than the part that was easy to see.
+    onUsage: (usage: { model: string; tokensIn: number; tokensOut: number }) => {
+      costs.push(usage);
+    },
   };
 
   const runReasoning = async (
@@ -199,6 +254,7 @@ export async function runTurn(
     toolCalls: { name: string; arguments: string; resultSummary: string }[];
     retrievedReferences: string[];
     rounds: number;
+    timings: TurnResult["roundTimings"];
   }> => {
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
       { role: "system", content: ABIGAIL_SYSTEM_PROMPT },
@@ -218,6 +274,7 @@ export async function runTurn(
     const toolCalls: { name: string; arguments: string; resultSummary: string }[] =
       [];
     const retrievedReferences: string[] = [];
+    const roundTimings: TurnResult["roundTimings"] = [];
     let roundsUsed = 0;
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
@@ -232,7 +289,12 @@ export async function runTurn(
       const isFinalRound = round === MAX_TOOL_ROUNDS - 1;
 
       roundsUsed += 1;
+      const roundStartedAt = Date.now();
+      let modelMs = 0;
+      let toolMs = 0;
+      const toolNames: string[] = [];
 
+      const modelStartedAt = Date.now();
       const response = await getClient().chat.completions.create({
         model: chosenModel,
         messages,
@@ -241,6 +303,8 @@ export async function runTurn(
           : { tools: TOOL_DEFINITIONS }),
         max_completion_tokens: 16_000,
       });
+
+      modelMs = Date.now() - modelStartedAt;
 
       costs.push({
         model: chosenModel,
@@ -257,17 +321,37 @@ export async function runTurn(
       const calls = message.tool_calls ?? [];
 
       if (calls.length === 0) {
+        roundTimings.push({
+          round: roundsUsed,
+          modelMs,
+          toolMs: 0,
+          localMs: Math.max(0, Date.now() - roundStartedAt - modelMs),
+          tools: [],
+        });
+
         return {
           reply: message.content ?? "",
           citations,
           toolCalls,
           retrievedReferences,
           rounds: roundsUsed,
+          timings: roundTimings,
         };
       }
 
+      // SEQUENTIAL, DELIBERATELY LEFT SO FOR NOW.
+      //
+      // When the model emits two or three tool calls in one round they run one
+      // after another, and each search is ~12.5s of which ~10.9s is the HyDE
+      // rewrite. Running them concurrently is the obvious win; it is not taken
+      // here because the measurement it would invalidate has not been reported
+      // yet. See docs/STATUS.md.
+      const toolsStartedAt = Date.now();
+
       for (const call of calls) {
         if (call.type !== "function") continue;
+
+        toolNames.push(call.function.name);
 
         const invocation = await executeTool(
           call.function.name,
@@ -289,10 +373,30 @@ export async function runTurn(
           content: invocation.resultSummary,
         });
       }
+
+      toolMs = Date.now() - toolsStartedAt;
+
+      roundTimings.push({
+        round: roundsUsed,
+        modelMs,
+        toolMs,
+        // Whatever is left is this process's own CPU: JSON parsing, context
+        // assembly, RRF fusion, hydration. On half a core this is the term the
+        // hardware question turns on.
+        localMs: Math.max(0, Date.now() - roundStartedAt - modelMs - toolMs),
+        tools: toolNames,
+      });
     }
 
     // Reached only if the final round still produced nothing at all.
-    return { reply: "", citations, toolCalls, retrievedReferences, rounds: roundsUsed };
+    return {
+      reply: "",
+      citations,
+      toolCalls,
+      retrievedReferences,
+      rounds: roundsUsed,
+      timings: roundTimings,
+    };
   };
 
   let attempt = await runReasoning();
@@ -358,6 +462,7 @@ export async function runTurn(
     regenerated,
     fellBack,
     reasoningRounds: attempt.rounds,
+    roundTimings: attempt.timings,
   };
 }
 
@@ -373,14 +478,21 @@ export async function persistTurn(
   userMessage: string,
   result: TurnResult,
 ): Promise<void> {
-  await MessageModel.create({
-    conversationId,
-    userId,
-    role: "user",
-    content: userMessage,
-  });
-
-  await MessageModel.create({
+  // ONE WRITE, NOT TWO.
+  //
+  // These were two sequential creates. A failure between them left the user's
+  // message in the conversation with no reply after it — the transcript would
+  // show someone saying the hardest thing they had to say and Abigail saying
+  // nothing back. insertMany sends them together, which closes that window
+  // without pulling a transaction and a replica-set requirement into the path.
+  await MessageModel.insertMany([
+    {
+      conversationId,
+      userId,
+      role: "user",
+      content: userMessage,
+    },
+    {
     conversationId,
     userId,
     role: "assistant",
@@ -394,9 +506,16 @@ export async function persistTurn(
     modelUsed: result.modelUsed,
     tokensIn: result.costs.reduce((n, c) => n + c.tokensIn, 0),
     tokensOut: result.costs.reduce((n, c) => n + c.tokensOut, 0),
+    // The breakdown, so spend can be priced per model instead of guessed.
+    costs: result.costs.map((c) => ({
+      model: c.model,
+      tokensIn: c.tokensIn,
+      tokensOut: c.tokensOut,
+    })),
     latencyMs: result.latencyMs,
     safetyIntercepted: result.safetyIntercepted,
-  });
+    },
+  ]);
 
   // A blocked turn is not practice and does not touch memory or the ledger.
   if (result.safetyIntercepted) return;

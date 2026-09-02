@@ -15,10 +15,10 @@
 
 import OpenAI from "openai";
 
-import { env } from "../../config/env";
 import { models } from "../../config/models";
 import { prompts } from "../../config/prompts";
 import { logger } from "../../lib/logger";
+import { openaiFor } from "../../lib/openai-client";
 
 export interface PremiseResult {
   /** The assumption underneath, stated plainly. */
@@ -58,7 +58,7 @@ const RESPONSE_SCHEMA = {
 
 let client: OpenAI | null = null;
 const getClient = (): OpenAI =>
-  (client ??= new OpenAI({ apiKey: env.OPENAI_API_KEY }));
+  (client ??= openaiFor("premise"));
 
 export async function runPremisePass(
   userMessage: string,

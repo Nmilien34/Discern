@@ -5,6 +5,7 @@ import { asyncHandler } from "../lib/async-handler";
 import { NotFoundError } from "../lib/errors";
 import { sendData } from "../lib/responses";
 import { loadUser, requireAuth } from "../middleware/auth.middleware";
+import { abigailTurnLimiters } from "../middleware/rate-limit.middleware";
 import { validateBody } from "../middleware/validate.middleware";
 import { ConversationModel, MessageModel, UserModel } from "../models";
 import { persistTurn, runTurn } from "../services/abigail/pipeline";
@@ -67,6 +68,9 @@ abigailRouter.post(
   "/conversations/:id/messages",
   requireAuth,
   loadUser,
+  // AFTER loadUser: the per-user limiters key on req.currentUser, and placed
+  // any earlier they would fall back to the IP and bucket everyone together.
+  ...abigailTurnLimiters,
   validateBody(sendMessageSchema),
   asyncHandler(async (req, res) => {
     const userId = req.currentUser!._id;

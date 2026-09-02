@@ -16,9 +16,9 @@
 
 import OpenAI from "openai";
 
-import { env } from "../../config/env";
 import { models } from "../../config/models";
 import { logger } from "../../lib/logger";
+import { openaiFor } from "../../lib/openai-client";
 
 const SYSTEM_PROMPT = `You help a scripture search engine.
 
@@ -41,7 +41,7 @@ Output only the passage-like text.`;
 
 let client: OpenAI | null = null;
 function getClient(): OpenAI {
-  if (!client) client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
+  if (!client) client = openaiFor("hyde");
   return client;
 }
 
@@ -52,7 +52,26 @@ function getClient(): OpenAI {
  * un-rewritten behaviour is a far better outcome than a search that throws
  * because a rewrite model was briefly unavailable.
  */
-export async function rewriteQueryForRetrieval(query: string): Promise<string> {
+export interface QueryRewriteResult {
+  /** The text to embed. The ORIGINAL query when the rewrite failed. */
+  text: string;
+  model: string;
+  tokensIn: number;
+  tokensOut: number;
+}
+
+/**
+ * Usage is returned, not swallowed.
+ *
+ * This call was invisible to every cost report until 2026-09-02: it happens
+ * inside retrieval, two layers below the pipeline that assembles TurnResult
+ * .costs, and it never read `response.usage`. It runs 2-3 times per turn, so
+ * every per-conversation figure produced before that date — including the
+ * $0.0422 reported as meeting the $0.04 target — was understated.
+ */
+export async function rewriteQueryForRetrieval(
+  query: string,
+): Promise<QueryRewriteResult> {
   try {
     const response = await getClient().chat.completions.create({
       model: models.conversation,
@@ -65,6 +84,11 @@ export async function rewriteQueryForRetrieval(query: string): Promise<string> {
       max_completion_tokens: 4_000,
     });
 
+    const usage = {
+      tokensIn: response.usage?.prompt_tokens ?? 0,
+      tokensOut: response.usage?.completion_tokens ?? 0,
+    };
+
     const text = response.choices[0]?.message?.content?.trim();
 
     if (!text) {
@@ -72,17 +96,22 @@ export async function rewriteQueryForRetrieval(query: string): Promise<string> {
         { finishReason: response.choices[0]?.finish_reason },
         "query rewrite returned nothing; using the original query",
       );
-      return query;
+      return { text: query, model: models.conversation, tokensIn: usage.tokensIn, tokensOut: usage.tokensOut };
     }
 
     // Both, not just the rewrite. The hypothetical text can drift off-topic, and
     // keeping the original anchors the embedding to what was actually asked.
-    return `${query}\n${text}`;
+    return {
+      text: `${query}\n${text}`,
+      model: models.conversation,
+      tokensIn: usage.tokensIn,
+      tokensOut: usage.tokensOut,
+    };
   } catch (error) {
     logger.warn(
       { err: error instanceof Error ? error.message : error },
       "query rewrite failed; using the original query",
     );
-    return query;
+    return { text: query, model: models.conversation, tokensIn: 0, tokensOut: 0 };
   }
 }

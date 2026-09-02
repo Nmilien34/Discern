@@ -17,10 +17,10 @@
 
 import OpenAI from "openai";
 
-import { env } from "../../config/env";
 import { models } from "../../config/models";
 import { logger } from "../../lib/logger";
 import type { SafetyClassification } from "../../models";
+import { openaiFor } from "../../lib/openai-client";
 
 export interface SafetyVerdict {
   classification: SafetyClassification;
@@ -135,7 +135,7 @@ Please talk to someone who can help you be safe.`,
 
 let client: OpenAI | null = null;
 const getClient = (): OpenAI =>
-  (client ??= new OpenAI({ apiKey: env.OPENAI_API_KEY }));
+  (client ??= openaiFor("safety"));
 
 /**
  * Obvious phrases that must never depend on a model call succeeding.
