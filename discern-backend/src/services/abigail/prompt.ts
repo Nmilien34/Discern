@@ -1,0 +1,111 @@
+// Abigail's system prompt.
+//
+// ARCHITECTURE.md §7 "Prompt discipline". Every line below is one of those
+// rules, written so it can actually be followed rather than merely agreed with.
+//
+// THE PROMPT TEXT IS NOT IN THIS FILE, OR IN THIS REPOSITORY. It is loaded from
+// prompts/abigail-system.txt at boot (config/prompts.ts). The repository is
+// public and that text is the product.
+//
+// The prompt is NOT where the hard guarantees live. Grounding is enforced in
+// code (grounding.ts), the safety gate runs before this ever executes, and the
+// harm filter strips passages before she sees them. A prompt is an instruction;
+// those three are facts.
+
+import { prompts } from "../../config/prompts";
+
+import type { PremiseResult } from "./premise";
+
+export interface PromptContext {
+  premise: PremiseResult;
+  currentStage: { slug: string; from: string; to: string } | null;
+  carryings: { reference: string; why: string | null; revisitCount: number }[];
+  facts: string[];
+  people: { name: string; relationship: string; context: string }[];
+  passagesGiven: { ref: string; why: string }[];
+  openThreads: string[];
+}
+
+/**
+ * Abigail's system prompt.
+ *
+ * The TEXT lives in prompts/abigail-system.txt, outside the repository — see
+ * config/prompts.ts for why. Everything about how it is used is still here.
+ */
+export const ABIGAIL_SYSTEM_PROMPT: string = prompts.abigailSystem;
+
+export function buildContextMessage(context: PromptContext): string {
+  const parts: string[] = [];
+
+  parts.push("=== PREMISE ANALYSIS (not visible to them) ===");
+  if (context.premise.premise) {
+    parts.push(`They are assuming: ${context.premise.premise}`);
+    parts.push(`That assumption is: ${context.premise.verdict.toUpperCase()}`);
+    if (context.premise.correction) {
+      parts.push(`What is actually true: ${context.premise.correction}`);
+    }
+    parts.push(`What they are really asking: ${context.premise.realQuestion}`);
+
+    if (context.premise.verdict === "wrong") {
+      parts.push(
+        "ACT ON THIS. Correct it early and plainly. Do not affirm the assumption first to soften it.",
+      );
+    } else if (context.premise.verdict === "incomplete") {
+      parts.push("ACT ON THIS. What they believe is true but missing something.");
+    } else if (context.premise.verdict === "sound") {
+      parts.push(
+        "Their premise holds. Do not invent a correction — meet them where they are and take them to scripture.",
+      );
+    }
+  } else {
+    parts.push("(unavailable this turn)");
+  }
+
+  if (context.currentStage) {
+    parts.push(
+      `\n=== STAGE ===\nThey are working through ${context.currentStage.from} → ${context.currentStage.to}.`,
+    );
+  }
+
+  if (context.carryings.length > 0) {
+    parts.push("\n=== WHAT THEY ARE ALREADY CARRYING ===");
+    for (const c of context.carryings) {
+      parts.push(
+        `${c.reference}${c.why ? ` — you gave them this because: ${c.why}` : ""} (returned to ${c.revisitCount}×)`,
+      );
+    }
+    if (context.carryings.length >= 3) {
+      parts.push(
+        "They are at the limit of three. You cannot give them a fourth without one being released.",
+      );
+    }
+  }
+
+  if (context.passagesGiven.length > 0) {
+    parts.push(
+      "\n=== ALREADY GIVEN — DO NOT HAND THESE OVER AGAIN ===\n" +
+        context.passagesGiven.map((p) => p.ref).join(", "),
+    );
+  }
+
+  if (context.facts.length > 0) {
+    parts.push("\n=== WHAT THEY HAVE TOLD YOU ===\n" + context.facts.join("\n"));
+  }
+
+  if (context.people.length > 0) {
+    parts.push(
+      "\n=== PEOPLE THEY HAVE MENTIONED ===\n" +
+        context.people
+          .map((p) => `${p.name} (${p.relationship}) — ${p.context}`)
+          .join("\n"),
+    );
+  }
+
+  if (context.openThreads.length > 0) {
+    parts.push(
+      "\n=== OPEN THREADS FROM LAST TIME ===\n" + context.openThreads.join("\n"),
+    );
+  }
+
+  return parts.join("\n");
+}

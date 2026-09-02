@@ -1,0 +1,125 @@
+# Two services from one repo: the API and the background worker.
+#
+# They build from the same commit but deploy INDEPENDENTLY. Corner's two drifted
+# on 2026-08-28 — the worker ran current code while the web service served a
+# build two commits earlier, returning 501 from handlers that had already been
+# implemented. /healthz reports the running commit and service name so that state
+# is one curl away rather than a diagnosis (see lib/build-info.ts); the worker
+# logs the same shape at startup so the two can be compared directly.
+
+# THE discern-secrets ENVIRONMENT GROUP IS AUTHORITATIVE.
+#
+# Both services pull every shared secret from it via `fromGroup`, and there are
+# deliberately NO per-service duplicates, so there is exactly one place a value
+# can be set. Do not re-add a key here that the group already defines: a
+# per-service entry OVERRIDES the group, which reintroduces the silent drift the
+# group exists to prevent — and the API and the worker must agree on the
+# database, the bucket and the provider keys or the worker processes jobs
+# against different infrastructure than the API wrote them to. A worker pointed
+# at a different database is a genuinely nasty failure: the queue looks empty
+# and jobs never run.
+#
+# Non-secret, per-service values (NODE_ENV, LOG_LEVEL, pool size, worker tuning)
+# stay inline deliberately: they legitimately differ per service.
+#
+# `sync: false` means "this value is deliberately NOT in the repo — a human sets
+# it in the Render dashboard". Render never invents a value for it, and a service
+# that boots without it fails fast at startup by design (config/env.ts).
+envVarGroups:
+  - name: discern-secrets
+    envVars:
+      - key: MONGODB_URI
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: ELEVENLABS_VOICE_ID
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: REVENUECAT_WEBHOOK_SECRET
+        sync: false
+      - key: REVENUECAT_SECRET_API_KEY
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+
+services:
+  - type: web
+    name: discern-api
+    runtime: node
+    plan: starter
+    branch: main
+    autoDeploy: true
+    healthCheckPath: /healthz
+    # --include=dev forces devDependencies (TypeScript, @types/*) to install even
+    # though NODE_ENV=production, because the build compiles TS. Runtime only
+    # needs dist/. Shared builds first: the backend imports @discern/shared.
+    buildCommand: npm install --include=dev && npm run build -w @discern/shared && npm run build -w @discern/backend
+    startCommand: npm run start -w @discern/backend
+    envVars:
+      - fromGroup: discern-secrets
+      - key: NODE_ENV
+        value: production
+      - key: LOG_LEVEL
+        value: info
+      # Asserted at boot. Discern shares a cluster with a shipped application, so
+      # connecting to `test` or to a neighbour's database must fail loudly rather
+      # than quietly serve traffic. See db/connect.ts.
+      - key: MONGODB_DB_NAME
+        value: discern
+      # A REAL AWS region — "auto" is an R2-ism the AWS SDK rejects.
+      - key: AWS_REGION
+        value: us-east-2
+      - key: S3_BUCKET
+        value: discern-audio
+      # ABIGAIL'S PROMPTS ARE NOT IN THIS REPOSITORY and the service will not
+      # boot without them. Add each as a SECRET FILE in the Render dashboard,
+      # named prompts/abigail-system.txt and prompts/premise-system.txt — they
+      # land at the project root, which is where the loader looks. There is no
+      # env var to set for the default layout; PROMPTS_DIR exists only if you
+      # mount them somewhere else. See discern-backend/src/config/prompts.ts.
+      #
+      # TEST_CLIENT_ENABLED is DELIBERATELY ABSENT. It gates the throwaway
+      # tester page at GET /test, and it is set in the Render dashboard for as
+      # long as testing runs, then removed. Declaring it here — at any value —
+      # would OVERRIDE the dashboard, so a value in this file could not be
+      # turned off without a deploy. It defaults to false in config/env.ts, so
+      # absence means off.
+
+  # Same build, different entry point. The worker binds no port and has no health
+  # check path, so Render runs it as a background worker rather than a web
+  # service.
+  #
+  # PHASE 1: the entry point is a stub that boots, asserts the database and
+  # idles. It is declared now so the manifest matches ARCHITECTURE.md §4 and so
+  # the service exists before Phase 8 fills it in.
+  - type: worker
+    name: discern-worker
+    runtime: node
+    plan: starter
+    branch: main
+    autoDeploy: true
+    buildCommand: npm install --include=dev && npm run build -w @discern/shared && npm run build -w @discern/backend
+    startCommand: npm run start:worker -w @discern/backend
+    envVars:
+      - fromGroup: discern-secrets
+      - key: NODE_ENV
+        value: production
+      - key: LOG_LEVEL
+        value: info
+      - key: MONGODB_DB_NAME
+        value: discern
+      - key: AWS_REGION
+        value: us-east-2
+      - key: S3_BUCKET
+        value: discern-audio
+      # Lower than the API's: the worker is a background poller, and this cluster
+      # also serves a production application.
+      - key: MONGODB_MAX_POOL_SIZE
+        value: 5
+      - key: WORKER_CONCURRENCY
+        value: 2

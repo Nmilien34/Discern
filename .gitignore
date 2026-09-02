@@ -1,0 +1,53 @@
+node_modules/
+dist/
+.expo/
+.env
+.env.*
+!.env.example
+coverage/
+
+# Build + native artifacts
+discern-frontend/build/
+ios/Pods/
+ios/build/
+android/
+*.xcarchive/
+*.dSYM/
+
+# ARCHITECTURE.md §3 marks BOTH of these untracked.
+#
+# This departs from Corner, which deliberately tracks design/ on the argument
+# that small diffable design output earns its history. The spec says untracked,
+# so untracked it is — see CONVENTIONS.md §10, departure 2.
+#
+# Both directories keep an on-disk README.md that is NOT committed. Do not add a
+# !marketing/README.md or !design/README.md negation to force them into the
+# index; those files are meant to live on disk for humans only.
+marketing/
+design/
+
+*.log
+.DS_Store
+.worktrees/
+worktrees/
+
+# KEPT ON DISK, DELIBERATELY OUT OF THE REMOTE.
+#
+# The GitHub repo is public. None of these is needed to build or run the
+# service — they are the product, not the code. The spec carries pricing and
+# positioning, DEFERRED carries the unit economics and the open decisions, and
+# RETRIEVAL-HARM is an incident write-up. Losing them would hurt; publishing
+# them would hurt more, and a public push cannot be taken back.
+#
+# If the repo is ever made private, delete this block — these belong in history.
+/ARCHITECTURE.md
+/DEFERRED.md
+/docs/
+
+# ABIGAIL'S PROMPTS. The service will not boot without them.
+#
+# The code that uses these ships; the text does not. They are NOT generated and
+# NOT reconstructable from this repository — if the working copy is lost, they
+# are lost. Back them up somewhere that is not this machine and not this repo.
+# See discern-backend/src/config/prompts.ts.
+/prompts/

@@ -1,0 +1,20 @@
+{
+  "name": "passages_vector_enriched",
+  "type": "vectorSearch",
+  "definition": {
+    "fields": [
+      {
+        "type": "vector",
+        "path": "embeddingEnriched",
+        "numDimensions": 3072,
+        "similarity": "cosine"
+      },
+      { "type": "filter", "path": "stageSlugs" },
+      { "type": "filter", "path": "situations" },
+      { "type": "filter", "path": "themes" },
+      { "type": "filter", "path": "authorId" },
+      { "type": "filter", "path": "bookSlug" },
+      { "type": "filter", "path": "handling" }
+    ]
+  }
+}

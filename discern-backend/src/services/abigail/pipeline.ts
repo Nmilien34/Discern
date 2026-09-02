@@ -1,0 +1,478 @@
+// THE ABIGAIL PIPELINE. ARCHITECTURE.md §7, in this exact order per turn.
+//
+//   1. SAFETY      hard gate. Fires -> the reasoning path NEVER runs.
+//   2. CONTEXT     stage, carryings, memory, last N turns, passagesGiven
+//   3. PREMISE     its own call, one question
+//   4. REASONING   model with tools, sees the premise output
+//   5. GROUNDING   enforced in code; regenerate once, then fall back
+//   6. PERSIST     message, citations, seedEvents, memory
+//
+// The ordering is not stylistic. Safety before context means a person in crisis
+// never has their disclosure fed through retrieval. Premise before reasoning
+// means the hardest judgement is made where nothing else competes with it.
+
+import OpenAI from "openai";
+import type { Types } from "mongoose";
+
+import { env } from "../../config/env";
+import { models } from "../../config/models";
+import { logger } from "../../lib/logger";
+import {
+  ConversationModel,
+  MessageModel,
+  SafetyEventModel,
+  UserMemoryModel,
+  UserStageModel,
+} from "../../models";
+import { recordSeedEvent } from "../journey/seed.service";
+import { classifyForSafety } from "../safety/classifier";
+import {
+  checkGrounding,
+  GROUNDING_FALLBACK,
+  logGroundingFailure,
+} from "./grounding";
+import { runPremisePass } from "./premise";
+import { ABIGAIL_SYSTEM_PROMPT, buildContextMessage } from "./prompt";
+import { activeCarryingsFor, executeTool, TOOL_DEFINITIONS } from "./tools";
+
+// Raised from 5 after watching the eval: her working pattern is search, read
+// several candidates, choose, then offer — which spends five rounds before she
+// has written anything. At the old ceiling she reached the final round with
+// tools disabled and hedged ("when you come back I can bring you a passage"),
+// which is the one thing she must never do.
+const MAX_TOOL_ROUNDS = 8;
+const RECENT_TURNS = 8;
+
+export interface TurnCost {
+  model: string;
+  tokensIn: number;
+  tokensOut: number;
+}
+
+export interface TurnResult {
+  reply: string;
+  safetyIntercepted: boolean;
+  safetyClassification: string;
+  premiseVerdict: string;
+  premise: string;
+  citations: { ref: string; passageId: string | null }[];
+  toolCalls: { name: string; arguments: string; resultSummary: string }[];
+  modelUsed: string;
+  costs: TurnCost[];
+  latencyMs: number;
+  grounded: boolean;
+  regenerated: boolean;
+  fellBack: boolean;
+  /** Reasoning rounds actually spent. Each one is a model call. */
+  reasoningRounds: number;
+}
+
+let client: OpenAI | null = null;
+const getClient = (): OpenAI =>
+  (client ??= new OpenAI({ apiKey: env.OPENAI_API_KEY }));
+
+/**
+ * Which model answers this turn (ARCHITECTURE.md §7 model routing).
+ *
+ * The reasoning tier is reserved for turns that do real work. Everything else
+ * gets the cheap tier, because running the expensive model on "thanks, that
+ * helps" is the largest avoidable cost in the app.
+ */
+function chooseModel(premiseVerdict: string, _isFirstTurn: boolean): string {
+  // MEASURED: the previous rule sent 18 of 18 non-blocked eval turns to the
+  // reasoning tier, for two compounding reasons — the premise pass returned
+  // "incomplete" on 83% of turns, and `isFirstTurn` routed the rest there
+  // anyway. Since most conversations are one or two turns, "first turn" was
+  // very nearly "every turn", and the tier meant nothing.
+  //
+  // Now: the expensive model is reserved for the turn that genuinely needs
+  // judgement — telling someone the thing they believe is FALSE. Everything
+  // else, including passages, stages and ordinary conversation, is the mid
+  // tier. If quality drops on those turns this is the first thing to revert,
+  // and a cheaper Abigail is not worth the saving.
+  if (premiseVerdict === "wrong") return models.reasoning;
+  return models.conversation;
+}
+
+export async function runTurn(
+  userId: Types.ObjectId,
+  conversationId: Types.ObjectId,
+  userMessage: string,
+): Promise<TurnResult> {
+  const startedAt = Date.now();
+  const costs: TurnCost[] = [];
+
+  // ---- 1. SAFETY GATE ------------------------------------------------------
+  const safety = await classifyForSafety(userMessage);
+  costs.push({
+    model: safety.modelUsed,
+    tokensIn: safety.tokensIn,
+    tokensOut: safety.tokensOut,
+  });
+
+  if (safety.blocked) {
+    // THE REASONING PATH NEVER RUNS. No retrieval, no premise pass, no model
+    // reflecting on what was disclosed.
+    await SafetyEventModel.create({
+      userId,
+      conversationId,
+      classification: safety.classification,
+      actionTaken: safety.failedClosed
+        ? "blocked (classifier unavailable — failed closed)"
+        : "blocked; crisis resources returned",
+      messageExcerpt: userMessage.slice(0, 200),
+      modelUsed: safety.modelUsed,
+    });
+
+    return {
+      reply: safety.response ?? "",
+      safetyIntercepted: true,
+      safetyClassification: safety.classification,
+      premiseVerdict: "not-run",
+      premise: "",
+      citations: [],
+      toolCalls: [],
+      modelUsed: safety.modelUsed,
+      costs,
+      latencyMs: Date.now() - startedAt,
+      grounded: true,
+      regenerated: false,
+      fellBack: false,
+      reasoningRounds: 0,
+    };
+  }
+
+  // ---- 2. CONTEXT ASSEMBLY -------------------------------------------------
+  const [memory, openStage, carryings, priorMessages] = await Promise.all([
+    UserMemoryModel.findOne({ userId }),
+    UserStageModel.findOne({ userId, closedAt: null }),
+    activeCarryingsFor(userId),
+    MessageModel.find({ conversationId })
+      .sort({ createdAt: 1 })
+      .limit(RECENT_TURNS * 2)
+      .lean(),
+  ]);
+
+  const recentTurns = priorMessages.map(
+    (m) => `${m.role === "user" ? "Them" : "You"}: ${m.content.slice(0, 400)}`,
+  );
+
+  // ---- 3. PREMISE PASS -----------------------------------------------------
+  const premise = await runPremisePass(userMessage, { recentTurns });
+  costs.push({
+    model: premise.modelUsed,
+    tokensIn: premise.tokensIn,
+    tokensOut: premise.tokensOut,
+  });
+
+  const passagesGiven = (memory?.passagesGiven ?? []).map((p) => ({
+    ref: p.ref,
+    why: p.why,
+  }));
+
+  const contextMessage = buildContextMessage({
+    premise,
+    currentStage: openStage
+      ? { slug: openStage.stageSlug, from: openStage.stageSlug, to: "" }
+      : null,
+    carryings,
+    facts: (memory?.facts ?? []).map((f) => f.text),
+    people: memory?.peopleMentioned ?? [],
+    passagesGiven,
+    openThreads: (memory?.openThreads ?? []).map((t) => t.text),
+  });
+
+  // ---- 4. REASONING TURN ---------------------------------------------------
+  const chosenModel = chooseModel(premise.verdict, priorMessages.length === 0);
+
+  const toolContext = {
+    userId,
+    conversationId,
+    passagesAlreadyGiven: passagesGiven.map((p) => p.ref),
+  };
+
+  const runReasoning = async (
+    extraInstruction?: string,
+  ): Promise<{
+    reply: string;
+    citations: { ref: string; passageId: string | null }[];
+    toolCalls: { name: string; arguments: string; resultSummary: string }[];
+    retrievedReferences: string[];
+    rounds: number;
+  }> => {
+    const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+      { role: "system", content: ABIGAIL_SYSTEM_PROMPT },
+      { role: "system", content: contextMessage },
+      ...priorMessages.map((m) => ({
+        role: m.role === "user" ? ("user" as const) : ("assistant" as const),
+        content: m.content,
+      })),
+      { role: "user", content: userMessage },
+    ];
+
+    if (extraInstruction) {
+      messages.push({ role: "system", content: extraInstruction });
+    }
+
+    const citations: { ref: string; passageId: string | null }[] = [];
+    const toolCalls: { name: string; arguments: string; resultSummary: string }[] =
+      [];
+    const retrievedReferences: string[] = [];
+    let roundsUsed = 0;
+
+    for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
+      // ON THE LAST ROUND, TAKE THE TOOLS AWAY.
+      //
+      // Without this the loop can exhaust while the model is still calling
+      // get_passage — it returns no final text, `reply` is empty, and the
+      // caller silently emits the grounding fallback while REPORTING
+      // grounded=true. Four of twenty-one eval turns failed exactly this way,
+      // and the flags said the pipeline was fine. Removing the tools forces an
+      // answer from what has already been retrieved.
+      const isFinalRound = round === MAX_TOOL_ROUNDS - 1;
+
+      roundsUsed += 1;
+
+      const response = await getClient().chat.completions.create({
+        model: chosenModel,
+        messages,
+        ...(isFinalRound
+          ? { tools: TOOL_DEFINITIONS, tool_choice: "none" as const }
+          : { tools: TOOL_DEFINITIONS }),
+        max_completion_tokens: 16_000,
+      });
+
+      costs.push({
+        model: chosenModel,
+        tokensIn: response.usage?.prompt_tokens ?? 0,
+        tokensOut: response.usage?.completion_tokens ?? 0,
+      });
+
+      const choice = response.choices[0];
+      const message = choice?.message;
+      if (!message) break;
+
+      messages.push(message as OpenAI.Chat.ChatCompletionMessageParam);
+
+      const calls = message.tool_calls ?? [];
+
+      if (calls.length === 0) {
+        return {
+          reply: message.content ?? "",
+          citations,
+          toolCalls,
+          retrievedReferences,
+          rounds: roundsUsed,
+        };
+      }
+
+      for (const call of calls) {
+        if (call.type !== "function") continue;
+
+        const invocation = await executeTool(
+          call.function.name,
+          call.function.arguments,
+          toolContext,
+        );
+
+        toolCalls.push({
+          name: invocation.name,
+          arguments: invocation.arguments,
+          resultSummary: invocation.resultSummary.slice(0, 1000),
+        });
+        citations.push(...invocation.citations);
+        retrievedReferences.push(...invocation.citations.map((c) => c.ref));
+
+        messages.push({
+          role: "tool",
+          tool_call_id: call.id,
+          content: invocation.resultSummary,
+        });
+      }
+    }
+
+    // Reached only if the final round still produced nothing at all.
+    return { reply: "", citations, toolCalls, retrievedReferences, rounds: roundsUsed };
+  };
+
+  let attempt = await runReasoning();
+  let regenerated = false;
+  let fellBack = false;
+  let emptyReply = false;
+
+  // An empty reply is its own failure and must not be laundered into a
+  // grounding verdict. checkGrounding treats "" as non-substantive and therefore
+  // grounded, which is technically true and completely misleading.
+  if (!attempt.reply.trim()) {
+    emptyReply = true;
+    logger.warn(
+      { toolCalls: attempt.toolCalls.length },
+      "reasoning produced no text after the tool loop",
+    );
+  }
+
+  // ---- 5. GROUNDING CHECK --------------------------------------------------
+  let verdict = checkGrounding({
+    reply: attempt.reply,
+    retrievedReferences: attempt.retrievedReferences,
+    toolCallCount: attempt.toolCalls.length,
+  });
+
+  if (!verdict.grounded || emptyReply) {
+    if (!verdict.grounded) logGroundingFailure(verdict, 1);
+    regenerated = true;
+
+    attempt = await runReasoning(
+      emptyReply
+        ? "You called tools but never wrote an answer. You have enough now. Write your reply to them, citing only references the tools returned."
+        : `YOUR PREVIOUS ANSWER FAILED THE GROUNDING CHECK: ${verdict.reason} ` +
+            "Call search_scripture or get_passage, and cite only references those tools returned. " +
+            "Do not cite anything from memory.",
+    );
+
+    verdict = checkGrounding({
+      reply: attempt.reply,
+      retrievedReferences: attempt.retrievedReferences,
+      toolCallCount: attempt.toolCalls.length,
+    });
+
+    if (!verdict.grounded || !attempt.reply.trim()) {
+      logGroundingFailure(verdict, 2);
+      fellBack = true;
+      attempt.reply = GROUNDING_FALLBACK;
+    }
+  }
+
+  return {
+    reply: attempt.reply || GROUNDING_FALLBACK,
+    safetyIntercepted: false,
+    safetyClassification: "none",
+    premiseVerdict: premise.verdict,
+    premise: premise.premise,
+    citations: attempt.citations,
+    toolCalls: attempt.toolCalls,
+    modelUsed: chosenModel,
+    costs,
+    latencyMs: Date.now() - startedAt,
+    grounded: verdict.grounded && !fellBack,
+    regenerated,
+    fellBack,
+    reasoningRounds: attempt.rounds,
+  };
+}
+
+/**
+ * 6. PERSIST. Message, citations, memory, seed events.
+ *
+ * Runs after the reply is produced so a bookkeeping failure cannot cost someone
+ * their answer.
+ */
+export async function persistTurn(
+  userId: Types.ObjectId,
+  conversationId: Types.ObjectId,
+  userMessage: string,
+  result: TurnResult,
+): Promise<void> {
+  await MessageModel.create({
+    conversationId,
+    userId,
+    role: "user",
+    content: userMessage,
+  });
+
+  await MessageModel.create({
+    conversationId,
+    userId,
+    role: "assistant",
+    content: result.reply,
+    citations: result.citations.map((c) => ({
+      ref: c.ref,
+      passageId: c.passageId,
+      translationId: null,
+    })),
+    toolCalls: result.toolCalls,
+    modelUsed: result.modelUsed,
+    tokensIn: result.costs.reduce((n, c) => n + c.tokensIn, 0),
+    tokensOut: result.costs.reduce((n, c) => n + c.tokensOut, 0),
+    latencyMs: result.latencyMs,
+    safetyIntercepted: result.safetyIntercepted,
+  });
+
+  // A blocked turn is not practice and does not touch memory or the ledger.
+  if (result.safetyIntercepted) return;
+
+  const offered = result.toolCalls.filter((t) => t.name === "offer_carrying");
+
+  await UserMemoryModel.findOneAndUpdate(
+    { userId },
+    {
+      $setOnInsert: { userId },
+      ...(offered.length > 0
+        ? {
+            $push: {
+              passagesGiven: {
+                $each: offered.flatMap((t) => {
+                  try {
+                    const args = JSON.parse(t.arguments) as {
+                      reference?: string;
+                      why?: string;
+                    };
+                    return args.reference
+                      ? [{ ref: args.reference, why: args.why ?? "", at: new Date() }]
+                      : [];
+                  } catch {
+                    return [];
+                  }
+                }),
+              },
+            },
+          }
+        : {}),
+    },
+    { upsert: true },
+  );
+
+  if (result.premise) {
+    await ConversationModel.updateOne(
+      { _id: conversationId },
+      { $addToSet: { premisesNoted: result.premise } },
+    );
+  }
+
+  const turnCount = await MessageModel.countDocuments({
+    conversationId,
+    role: "user",
+  });
+
+  await recordSeedEvent({
+    userId,
+    type: "conversation_depth",
+    weight: turnCount,
+    sourceId: conversationId,
+  });
+
+  // premise_reframed fires only when she actually corrected something. It is the
+  // moment the product is for, and awarding it for every turn would make it
+  // meaningless.
+  if (result.premiseVerdict === "wrong" || result.premiseVerdict === "incomplete") {
+    await recordSeedEvent({
+      userId,
+      type: "premise_reframed",
+      weight: 1,
+      sourceId: conversationId,
+    });
+  }
+
+  logger.info(
+    {
+      conversationId: String(conversationId),
+      model: result.modelUsed,
+      premiseVerdict: result.premiseVerdict,
+      toolCalls: result.toolCalls.length,
+      grounded: result.grounded,
+      regenerated: result.regenerated,
+      latencyMs: result.latencyMs,
+    },
+    "abigail turn complete",
+  );
+}

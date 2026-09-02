@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Abigail</title>
+<!--
+  THROWAWAY TEST CLIENT. Delete this file and its route in app.ts before launch.
+
+  It exists to answer the one question no amount of backend work can answer:
+  whether a real person, on their own phone, at their own hour, finds Abigail
+  worth talking to. It is not the app, and it is deliberately plain, so that
+  what gets tested is her and not a design.
+
+  It talks only to the API it was served from. Every conversation is persisted
+  by the backend exactly as the real app would persist it, so `npm run
+  transcripts` can read them all afterwards.
+-->
+<style>
+  :root {
+    --bg: #faf8f5; --ink: #1c1a17; --muted: #6b645c;
+    --line: #e2dcd3; --her: #ffffff; --me: #efe9e1; --accent: #5a4632;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #171614; --ink: #eae5de; --muted: #98918a;
+      --line: #302d29; --her: #201e1b; --me: #2b2723; --accent: #c9b295;
+    }
+  }
+  * { box-sizing: border-box; -webkit-text-size-adjust: 100%; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font: 17px/1.55 ui-serif, Georgia, "Times New Roman", serif;
+    display: flex; flex-direction: column;
+  }
+  header {
+    padding: 14px 16px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: baseline; gap: 10px; flex: 0 0 auto;
+    padding-top: max(14px, env(safe-area-inset-top));
+  }
+  header b { font-size: 17px; letter-spacing: .02em; }
+  header span { font-size: 12px; color: var(--muted); font-family: ui-sans-serif, system-ui, sans-serif; }
+  #log { flex: 1 1 auto; overflow-y: auto; padding: 18px 16px 8px; }
+  .turn { max-width: 640px; margin: 0 auto 18px; }
+  .bubble {
+    padding: 12px 14px; border-radius: 14px; border: 1px solid var(--line);
+    white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  .me .bubble { background: var(--me); margin-left: 15%; }
+  .her .bubble { background: var(--her); margin-right: 6%; }
+  .who {
+    font: 600 11px/1 ui-sans-serif, system-ui, sans-serif; letter-spacing: .09em;
+    text-transform: uppercase; color: var(--muted); margin: 0 0 6px 2px;
+  }
+  .me .who { text-align: right; margin-right: 2px; }
+  .cites { margin: 10px 0 0 2px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .cite {
+    font: 13px/1 ui-sans-serif, system-ui, sans-serif; padding: 8px 11px;
+    border: 1px solid var(--accent); border-radius: 999px; color: var(--accent);
+    background: none; cursor: pointer; -webkit-tap-highlight-color: transparent;
+  }
+  .cite:disabled { opacity: .55; cursor: default; }
+  .note {
+    font: 13px/1.5 ui-sans-serif, system-ui, sans-serif; color: var(--muted);
+    max-width: 640px; margin: 0 auto 18px; text-align: center;
+  }
+  .note.bad { color: #b4472f; }
+  #carrying {
+    max-width: 640px; margin: 0 auto 10px; display: none;
+    font: 13px/1.4 ui-sans-serif, system-ui, sans-serif;
+  }
+  #carrying.on { display: block; }
+  #carrying h2 {
+    font: 600 11px/1 ui-sans-serif, system-ui, sans-serif; letter-spacing: .09em;
+    text-transform: uppercase; color: var(--muted); margin: 0 0 7px 2px;
+  }
+  #carrying ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 7px; }
+  #carrying li {
+    display: flex; align-items: center; gap: 6px; padding: 6px 7px 6px 11px;
+    border: 1px solid var(--line); border-radius: 999px; background: var(--her);
+  }
+  #carrying li button {
+    border: none; background: none; color: var(--muted); cursor: pointer;
+    font: 16px/1 ui-sans-serif, system-ui, sans-serif; padding: 2px 5px;
+  }
+  footer {
+    flex: 0 0 auto; border-top: 1px solid var(--line); padding: 10px 16px;
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
+  }
+  form { max-width: 640px; margin: 0 auto; display: flex; gap: 10px; align-items: flex-end; }
+  textarea {
+    flex: 1 1 auto; resize: none; font: inherit; color: inherit;
+    background: var(--her); border: 1px solid var(--line); border-radius: 12px;
+    padding: 11px 12px; max-height: 140px; min-height: 44px;
+  }
+  textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  button[type=submit] {
+    flex: 0 0 auto; height: 44px; padding: 0 18px; border-radius: 12px;
+    border: none; background: var(--accent); color: var(--bg);
+    font: 600 15px/1 ui-sans-serif, system-ui, sans-serif; cursor: pointer;
+  }
+  button[type=submit]:disabled { opacity: .4; cursor: default; }
+  .dots::after {
+    content: "\00b7"; animation: d 1.2s infinite steps(4, end); letter-spacing: 3px;
+  }
+  @keyframes d {
+    0%   { content: "\00b7" }
+    25%  { content: "\00b7\00b7" }
+    50%  { content: "\00b7\00b7\00b7" }
+    75%  { content: "\00b7\00b7\00b7\00b7" }
+  }
+</style>
+</head>
+<body>
+
+<header><b>Abigail</b><span id="status">connecting</span></header>
+<div id="log"></div>
+<footer>
+  <div id="carrying"><h2></h2><ul></ul></div>
+  <form id="composer">
+    <textarea id="input" rows="1" placeholder="Say what's actually going on." autocomplete="off"></textarea>
+    <button type="submit" id="send" disabled>Send</button>
+  </form>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+
+  // ── Token.
+  //
+  // It arrives in the URL FRAGMENT, never the query string: a fragment is not
+  // sent to the server, so it never lands in an access log or a Referer header.
+  // It is moved into localStorage and stripped from the address bar on first
+  // load, so a screenshot of the URL does not leak it either.
+  var params = new URLSearchParams(location.hash.slice(1));
+  var API = params.get("api") || localStorage.getItem("discern.api") || location.origin;
+  var token = params.get("t") || localStorage.getItem("discern.token");
+
+  if (params.get("t")) {
+    localStorage.setItem("discern.token", params.get("t"));
+    localStorage.setItem("discern.api", API);
+    history.replaceState(null, "", location.pathname);
+  }
+
+  var log = document.getElementById("log");
+  var input = document.getElementById("input");
+  var send = document.getElementById("send");
+  var status = document.getElementById("status");
+  var strip = document.getElementById("carrying");
+  var conversationId = null;
+  var busy = false;
+  var carried = [];
+
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined) n.textContent = text;
+    return n;
+  }
+
+  function scroll() { log.scrollTop = log.scrollHeight; }
+
+  function note(text, bad) {
+    var n = el("div", "note" + (bad ? " bad" : ""), text);
+    log.appendChild(n);
+    scroll();
+    return n;
+  }
+
+  function bubble(who, text) {
+    var turn = el("div", "turn " + (who === "me" ? "me" : "her"));
+    turn.appendChild(el("p", "who", who === "me" ? "You" : "Abigail"));
+    turn.appendChild(el("div", "bubble", text));
+    log.appendChild(turn);
+    scroll();
+    return turn;
+  }
+
+  function api(path, options) {
+    options = options || {};
+    return fetch(API + path, {
+      method: options.method || "GET",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer " + token
+      },
+      body: options.body ? JSON.stringify(options.body) : undefined
+    }).then(function (res) {
+      return res.json().catch(function () { return {}; }).then(function (json) {
+        if (!res.ok) {
+          var err = new Error((json.error && json.error.message) || ("HTTP " + res.status));
+          err.status = res.status;
+          throw err;
+        }
+        return json.data !== undefined ? json.data : json;
+      });
+    });
+  }
+
+  // ── What they are carrying.
+  //
+  // Abigail hands over a passage HERSELF, through the offer_carrying tool: one
+  // per turn, near the end, the single thing she wants them to sit with. So the
+  // main job here is to SHOW that, not to offer it. The strip above the composer
+  // is read back from the API after every turn, so it is the live truth of what
+  // they hold rather than a guess assembled from her citations.
+  //
+  // The buttons under a reply cover the rest — passages she quoted on the way
+  // that she chose not to give them. A button appears only for a reference they
+  // are not already carrying, or the first chip would always duplicate what she
+  // just did and 409 against the cap.
+
+  function renderCarrying() {
+    var list = strip.querySelector("ul");
+    list.innerHTML = "";
+    strip.querySelector("h2").textContent = "Carrying " + carried.length + " of 3";
+    strip.className = carried.length ? "on" : "";
+
+    carried.forEach(function (c) {
+      var li = el("li");
+      li.appendChild(el("span", null, c.reference));
+      var x = el("button", null, "×");
+      x.type = "button";
+      x.setAttribute("aria-label", "Release " + c.reference);
+      // Release earns its place: the cap is three, she gives one nearly every
+      // turn, and with no way to let something go a tester is stuck after three
+      // turns and carrying is dead for the rest of the session.
+      x.onclick = function () {
+        x.disabled = true;
+        api("/v1/carryings/" + c.id, { method: "PATCH", body: { release: true } })
+          .then(refreshCarrying)
+          .catch(function () { x.disabled = false; });
+      };
+      li.appendChild(x);
+      list.appendChild(li);
+    });
+  }
+
+  function refreshCarrying() {
+    return api("/v1/carryings").then(function (data) {
+      carried = (data.active || []).map(function (c) {
+        return { id: c.id, reference: c.reference };
+      });
+      renderCarrying();
+    }).catch(function () {
+      // Informational. It must never break a turn.
+    });
+  }
+
+  // "Book Chapter" keys for every reference that appears in the REPLY TEXT.
+  //
+  // The API's `citations` is every passage the TOOLS returned — one search adds
+  // five — so offering a button per entry offers passages she searched and then
+  // deliberately chose NOT to hand over, including ones her cautions steered her
+  // away from. A tester could carry something she declined to give them. Only
+  // what she actually wrote gets a button.
+  function writtenIn(reply) {
+    var keys = {};
+    var re = /\b((?:[123]\s+)?[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+(\d+):\d+/g;
+    var m;
+    while ((m = re.exec(reply)) !== null) {
+      keys[m[1].toLowerCase().replace(/s$/, "") + " " + m[2]] = true;
+    }
+    return keys;
+  }
+
+  function citations(turn, refs, reply) {
+    if (!refs || !refs.length) return;
+
+    var written = writtenIn(reply);
+    var seen = {};
+    carried.forEach(function (c) { seen[c.reference] = true; });
+
+    refs = refs.filter(function (r) {
+      if (!r || seen[r]) return false;
+      seen[r] = true;
+      var m = /^((?:[123]\s+)?[A-Za-z][A-Za-z]*(?:\s+[A-Za-z]+)?)\s+(\d+):/.exec(r);
+      if (!m) return false;
+      return written[m[1].toLowerCase().replace(/s$/, "") + " " + m[2]] === true;
+    });
+
+    if (!refs.length) return;
+
+    var row = el("div", "cites");
+    refs.forEach(function (ref) {
+      var b = el("button", "cite", "Carry " + ref);
+      b.type = "button";
+      b.onclick = function () {
+        b.disabled = true;
+        b.textContent = "Carrying…";
+        // source "self": she did not give them this one, they picked it up.
+        api("/v1/carryings", {
+          method: "POST",
+          body: { kind: "passage", reference: ref, source: "self" }
+        }).then(function () {
+          b.textContent = "Carrying " + ref;
+          return refreshCarrying();
+        }).catch(function (e) {
+          // 409 is the three-carrying cap — a product answer, not a bug, and
+          // the tester needs telling what to do about it.
+          b.disabled = false;
+          b.textContent = e.status === 409 ? "Release one first" : "Couldn't carry";
+        });
+      };
+      row.appendChild(b);
+    });
+    turn.appendChild(row);
+    scroll();
+  }
+
+  function setBusy(state) {
+    busy = state;
+    send.disabled = state || !conversationId;
+    input.disabled = state;
+  }
+
+  function say(text) {
+    bubble("me", text);
+    setBusy(true);
+    var waiting = note("");
+    waiting.className = "note dots";
+
+    api("/v1/abigail/conversations/" + conversationId + "/messages", {
+      method: "POST",
+      body: { content: text }
+    }).then(function (data) {
+      waiting.remove();
+      var turn = bubble("her", data.reply);
+      // Read back what she actually gave them BEFORE deciding which of the
+      // remaining citations still need a button of their own.
+      refreshCarrying().then(function () {
+        citations(turn, data.citations, data.reply);
+      });
+      setBusy(false);
+      input.focus();
+    }).catch(function (e) {
+      waiting.remove();
+      note("She didn't answer: " + e.message + ". Try sending it again.", true);
+      setBusy(false);
+    });
+  }
+
+  // ── Start.
+  if (!token) {
+    status.textContent = "no link";
+    note("This link is missing its access token. Ask Nick for a fresh one.", true);
+    return;
+  }
+
+  api("/v1/abigail/conversations", { method: "POST", body: { mode: "text" } })
+    .then(function (data) {
+      conversationId = data.id;
+      status.textContent = "ready";
+      send.disabled = false;
+      note("Anything you type here is saved and will be read afterwards. Please don't put anything in it you wouldn't want read.");
+      refreshCarrying();
+      input.focus();
+    })
+    .catch(function (e) {
+      status.textContent = "offline";
+      if (e.status === 402 || e.status === 401) {
+        note("This tester link has expired. Ask Nick for a fresh one.", true);
+      } else {
+        note("Couldn't reach Abigail: " + e.message, true);
+      }
+    });
+
+  // ── Composer.
+  input.addEventListener("input", function () {
+    input.style.height = "auto";
+    input.style.height = Math.min(input.scrollHeight, 140) + "px";
+  });
+
+  input.addEventListener("keydown", function (e) {
+    // Enter sends on a desktop keyboard. On a phone the on-screen return key
+    // inserts a newline, which is what a phone keyboard should do.
+    if (e.key === "Enter" && !e.shiftKey && !matchMedia("(pointer: coarse)").matches) {
+      e.preventDefault();
+      document.getElementById("composer").requestSubmit();
+    }
+  });
+
+  document.getElementById("composer").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var text = input.value.trim();
+    if (!text || busy || !conversationId) return;
+    input.value = "";
+    input.style.height = "auto";
+    say(text);
+  });
+})();
+</script>
+</body>
+</html>
