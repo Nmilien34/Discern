@@ -77,11 +77,16 @@ services:
       - key: S3_BUCKET
         value: discern-audio
       # ABIGAIL'S PROMPTS ARE NOT IN THIS REPOSITORY and the service will not
-      # boot without them. Add each as a SECRET FILE in the Render dashboard,
-      # named prompts/abigail-system.txt and prompts/premise-system.txt — they
-      # land at the project root, which is where the loader looks. There is no
-      # env var to set for the default layout; PROMPTS_DIR exists only if you
-      # mount them somewhere else. See discern-backend/src/config/prompts.ts.
+      # boot without them. Add each as a SECRET FILE in the Render dashboard:
+      #
+      #   abigail-system.txt
+      #   premise-system.txt
+      #
+      # BARE FILENAMES — the dashboard rejects a "/" in the name, so they land
+      # at the project root rather than in a prompts/ subfolder. The loader
+      # checks the working directory itself for exactly that reason, so no
+      # PROMPTS_DIR is needed here; it exists only for mounting them somewhere
+      # else entirely. See discern-backend/src/config/prompts.ts.
       #
       # TEST_CLIENT_ENABLED is DELIBERATELY ABSENT. It gates the throwaway
       # tester page at GET /test, and it is set in the Render dashboard for as

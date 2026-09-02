@@ -47,6 +47,13 @@ function candidateDirectories(): string[] {
   return [
     path.resolve(process.cwd(), "prompts"),
     path.resolve(process.cwd(), "..", "prompts"),
+    // The working directory ITSELF, last.
+    //
+    // Render Secret Files take a bare filename — the dashboard rejects any "/"
+    // — so they land at the project root rather than in a prompts/ subfolder.
+    // Checking cwd means that works with no PROMPTS_DIR and no hardcoded
+    // /opt/render/... path, which would silently rot if Render moved it.
+    process.cwd(),
   ];
 }
 

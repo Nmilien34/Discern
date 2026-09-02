@@ -60,9 +60,10 @@ prompts/
   premise-system.txt     the premise pass
 ```
 
-Locally, put them in `prompts/` at the repository root. In a deployed environment, add each
-one as a Render Secret File named `prompts/<file>`, or mount them anywhere and point
-`PROMPTS_DIR` at the directory.
+Locally, put them in `prompts/` at the repository root. On Render, add each as a **Secret
+File** using a bare filename — `abigail-system.txt`, `premise-system.txt` — because the
+dashboard rejects `/` in the name; they land at the project root, which the loader also
+checks. Set `PROMPTS_DIR` only if you mount them somewhere else entirely.
 
 The loader (`discern-backend/src/config/prompts.ts`) reads them once at import, so a missing
 or truncated file fails at startup rather than at the first person who talks to her. A short
