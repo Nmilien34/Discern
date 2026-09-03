@@ -27,7 +27,7 @@ export interface SpendDecision {
   /** Set when refused. Shown to the person, so it is written for them. */
   reason: string | null;
   /** Which ceiling stopped it, for logs and for deciding what to raise. */
-  limit: "user-daily" | "global-daily" | "per-request" | null;
+  limit: "user-daily" | "global-daily" | "per-request" | "bulk-daily" | null;
   usedToday: number;
   limitValue: number;
 }
@@ -73,10 +73,32 @@ async function refund(
  * RESERVES FIRST. A refusal refunds what it just added, which costs one extra
  * write on the path nobody takes and buys a check that cannot be raced.
  */
+/**
+ * TWO LEDGERS, AND THEY NEVER TOUCH.
+ *
+ *   serving  live user requests. Tight limits, because their job is to stop a
+ *            retry loop — passage-only plus a permanent cache already removed
+ *            the business-model exposure they were originally guarding.
+ *   bulk     operator-initiated pregeneration. Its own much larger limit, its
+ *            own row, and it draws down NOTHING from serving.
+ *
+ * The corpus run is why this exists. It wrote 8.4M characters into the same
+ * global counter serving uses, so for the rest of that day every genuinely new
+ * passage was refused for every user — the guard causing the outage it exists
+ * to prevent. Cache hits were unaffected, which is the only reason it was not
+ * a visible incident.
+ *
+ * SCOPE IS EXPLICIT AT THE CALL SITE. It is not inferred from the user id, not
+ * from a magic "pregen" string, and not from whether a request looks automated.
+ * A caller that wants the large budget has to say so.
+ */
+export type SpendScope = "serving" | "bulk";
+
 export async function reserveSpeechSpend(
   userId: string,
   kind: SpeechKind,
   amount: number,
+  scope: SpendScope,
 ): Promise<SpendDecision> {
   const perUserLimit =
     kind === "tts"
@@ -84,6 +106,38 @@ export async function reserveSpeechSpend(
       : env.STT_DAILY_SECONDS_PER_USER;
   const globalLimit =
     kind === "tts" ? env.TTS_DAILY_CHARS_GLOBAL : env.STT_DAILY_SECONDS_GLOBAL;
+
+  // ---- BULK: one row, one limit, and no contact with serving.
+  if (scope === "bulk") {
+    const bulkLimit =
+      kind === "tts" ? env.TTS_BULK_DAILY_CHARS : env.STT_BULK_DAILY_SECONDS;
+    const bulkTotal = await bump("bulk", kind, amount);
+
+    if (bulkTotal > bulkLimit) {
+      await refund("bulk", kind, amount);
+      logger.warn(
+        { kind, bulkTotal, bulkLimit },
+        "speech ceiling: BULK daily limit reached — serving is unaffected",
+      );
+      return {
+        allowed: false,
+        reason:
+          "The pregeneration budget for today is spent. Live audio is " +
+          "unaffected; run the rest tomorrow or raise TTS_BULK_DAILY_CHARS.",
+        limit: "bulk-daily",
+        usedToday: bulkTotal - amount,
+        limitValue: bulkLimit,
+      };
+    }
+
+    return {
+      allowed: true,
+      reason: null,
+      limit: null,
+      usedToday: bulkTotal,
+      limitValue: bulkLimit,
+    };
+  }
 
   if (kind === "tts" && amount > env.TTS_MAX_CHARS_PER_REQUEST) {
     return {
@@ -151,7 +205,13 @@ export async function releaseSpeechSpend(
   userId: string,
   kind: SpeechKind,
   amount: number,
+  scope: SpendScope,
 ): Promise<void> {
+  if (scope === "bulk") {
+    await refund("bulk", kind, amount);
+    return;
+  }
+
   await Promise.all([
     refund(`user:${userId}`, kind, amount),
     refund("global", kind, amount),
@@ -170,19 +230,24 @@ export async function speechUsageToday(userId?: string): Promise<{
   charactersSynthesized: number;
   secondsTranscribed: number;
   requests: number;
-  estimatedUsd: number;
-}> {
-  const scope = userId ? `user:${userId}` : "global";
-  const row = await SpeechUsageModel.findOne({ scope, day: today() }).lean();
+}[]> {
+  // BULK IS REPORTED SEPARATELY, always. A cost report that adds a corpus run
+  // to a day of live listening says the product costs a thousand times what it
+  // does, and the whole point of the split is that they are different money.
+  const scopes = ["global", "bulk", ...(userId ? [`user:${userId}`] : [])];
 
-  const chars = row?.charactersSynthesized ?? 0;
-  const seconds = row?.secondsTranscribed ?? 0;
+  const rows = await SpeechUsageModel.find({
+    scope: { $in: scopes },
+    day: today(),
+  }).lean();
 
-  return {
-    scope,
-    charactersSynthesized: chars,
-    secondsTranscribed: seconds,
-    requests: row?.requests ?? 0,
-    estimatedUsd: estimateUsd("tts", chars) + estimateUsd("stt", seconds),
-  };
+  return scopes.map((scope) => {
+    const row = rows.find((r) => r.scope === scope);
+    return {
+      scope: scope === "global" ? "serving (global)" : scope,
+      charactersSynthesized: row?.charactersSynthesized ?? 0,
+      secondsTranscribed: row?.secondsTranscribed ?? 0,
+      requests: row?.requests ?? 0,
+    };
+  });
 }

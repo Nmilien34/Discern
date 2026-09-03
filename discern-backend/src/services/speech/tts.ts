@@ -19,6 +19,7 @@ import { logger } from "../../lib/logger";
 import { SpeechCacheModel } from "../../models";
 import { audioUrl, putAudio, speechKey } from "./storage";
 import { releaseSpeechSpend, reserveSpeechSpend } from "./spend";
+import type { SpendScope } from "./spend";
 
 const API = "https://api.elevenlabs.io/v1";
 
@@ -75,7 +76,7 @@ export interface SynthesisResult {
    * A bulk run that cannot tell them apart stops on the first long passage —
    * which is exactly what happened to the corpus pregeneration at 952 of 3,879.
    */
-  refusedLimit?: "user-daily" | "global-daily" | "per-request";
+  refusedLimit?: "user-daily" | "global-daily" | "per-request" | "bulk-daily";
 }
 
 /**
@@ -88,7 +89,17 @@ export interface SynthesisResult {
 export async function synthesize(
   text: string,
   userId: string,
-  options: { passageReference?: string; translationId?: string } = {},
+  options: {
+    passageReference?: string;
+    translationId?: string;
+    /**
+     * Which ledger this spends from. EXPLICIT, never inferred.
+     *
+     * Defaults to "serving" so a caller that forgets cannot accidentally draw
+     * on the large operator budget — the safe direction is the tight one.
+     */
+    scope?: SpendScope;
+  } = {},
 ): Promise<SynthesisResult | null> {
   const clean = text.trim();
   if (!clean) return null;
@@ -112,7 +123,9 @@ export async function synthesize(
   }
 
   // ---- 2. THE CEILING, before a single character is sent.
-  const decision = await reserveSpeechSpend(userId, "tts", clean.length);
+  const scope: SpendScope = options.scope ?? "serving";
+
+  const decision = await reserveSpeechSpend(userId, "tts", clean.length, scope);
 
   if (!decision.allowed) {
     return {
@@ -179,7 +192,7 @@ export async function synthesize(
   } catch (error) {
     // The characters were reserved and never spent. Give them back, or a
     // provider outage silently eats somebody's daily allowance.
-    await releaseSpeechSpend(userId, "tts", clean.length);
+    await releaseSpeechSpend(userId, "tts", clean.length, scope);
 
     logger.error(
       { err: error instanceof Error ? error.message : error, characters: clean.length },

@@ -169,6 +169,9 @@ async function main(): Promise<void> {
       const result = await synthesize(item.text, "pregen", {
         passageReference: item.reference,
         translationId: defaultTranslationId,
+        // THE BULK LEDGER. A corpus run must never draw down the budget a
+        // real listener's first play depends on.
+        scope: "bulk",
       });
 
       if (!result || result.refusedReason) {

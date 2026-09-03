@@ -277,6 +277,20 @@ const envSchema = z.object({
   // 3.9M characters, so the global cap is a hard floor under the worst case.
   TTS_DAILY_CHARS_PER_USER: z.coerce.number().int().positive().default(40_000),
   TTS_DAILY_CHARS_GLOBAL: z.coerce.number().int().positive().default(500_000),
+
+  /**
+   * The BULK ledger: operator-initiated pregeneration only.
+   *
+   * Separate from serving so a corpus run cannot lock real users out of new
+   * audio for the rest of the day — which is what happened on 2026-09-03, when
+   * 8.4M characters of pregeneration went through the same global counter that
+   * live requests check against.
+   *
+   * 5M is one full-corpus pass in a day with room to spare; the whole WEB
+   * corpus is 3.74M characters.
+   */
+  TTS_BULK_DAILY_CHARS: z.coerce.number().int().positive().default(5_000_000),
+  STT_BULK_DAILY_SECONDS: z.coerce.number().int().positive().default(100_000),
   STT_DAILY_SECONDS_PER_USER: z.coerce.number().int().positive().default(1_800),
   STT_DAILY_SECONDS_GLOBAL: z.coerce.number().int().positive().default(72_000),
   /** Longest single synthesis. A runaway reply must not be one huge bill. */

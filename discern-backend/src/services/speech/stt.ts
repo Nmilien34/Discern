@@ -35,7 +35,7 @@ export async function transcribe(
     Math.ceil(audio.byteLength / ASSUMED_BITRATE_BYTES_PER_SECOND),
   );
 
-  const decision = await reserveSpeechSpend(userId, "stt", estimatedSeconds);
+  const decision = await reserveSpeechSpend(userId, "stt", estimatedSeconds, "serving");
 
   if (!decision.allowed) {
     return {
@@ -67,7 +67,7 @@ export async function transcribe(
 
     return { text: (body.text ?? "").trim(), seconds: estimatedSeconds };
   } catch (error) {
-    await releaseSpeechSpend(userId, "stt", estimatedSeconds);
+    await releaseSpeechSpend(userId, "stt", estimatedSeconds, "serving");
     logger.error(
       { err: error instanceof Error ? error.message : error },
       "transcription failed; reservation released",

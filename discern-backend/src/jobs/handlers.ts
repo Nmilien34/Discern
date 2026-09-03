@@ -90,7 +90,10 @@ const ttsPregenerate: JobHandler = async (job) => {
 
     // "pregen" has its own ceiling scope, so warming the cache can never
     // consume a real person's daily allowance.
-    const result = await synthesize(text, "pregen", { passageReference: p.reference });
+    const result = await synthesize(text, "pregen", {
+      passageReference: p.reference,
+      scope: "bulk",
+    });
 
     if (result?.refusedReason) {
       // A ceiling refusal will refuse everything after it. Stop rather than
