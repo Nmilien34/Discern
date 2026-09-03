@@ -74,7 +74,25 @@ export const models: ModelTiers = {
   safety: env.SAFETY_MODEL ?? "gpt-5-nano",
   premise: env.PREMISE_MODEL ?? "gpt-5-mini",
   conversation: env.CONVERSATION_MODEL ?? "gpt-5-mini",
-  reasoning: env.REASONING_MODEL ?? "gpt-5",
+  /**
+   * MEASURED AND DROPPED TO MINI on 2026-09-03.
+   *
+   * This tier exists for one case: a `wrong` premise, where correcting the
+   * assumption is the whole product. That case never appeared in eval:critical
+   * — 1 turn in 30 reached this tier, and only by chance — so the gate was
+   * added a scenario for it and both models were run against it five times:
+   *
+   *                 gate      rounds   latency   cost/turn
+   *   gpt-5         5/5          3       111s     $0.0810
+   *   gpt-5-mini    5/5          4        80s     $0.0200
+   *
+   * Mini holds the quality bar on the hardest thing this app does, 28% faster
+   * and at a quarter of the cost. gpt-5 was not earning 4x.
+   *
+   * The ROUTING IS INTACT — chooseModel still sends a wrong premise here — so
+   * putting gpt-5 back is one dashboard value if a later measurement disagrees.
+   */
+  reasoning: env.REASONING_MODEL ?? "gpt-5-mini",
   // NANO, matching the safety tier. At the conversation tier this call took
   // 10.9s and emitted 429-795 output tokens to produce three sentences; at
   // minimal effort on the same tier, 1.9s and 85 tokens. There is no reason a

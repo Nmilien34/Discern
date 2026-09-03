@@ -29,6 +29,7 @@ import { classifyForSafety } from "../safety/classifier";
 import { openaiFor } from "../../lib/openai-client";
 import {
   checkGrounding,
+  referencedPassages,
   GROUNDING_FALLBACK,
   logGroundingFailure,
 } from "./grounding";
@@ -500,13 +501,30 @@ async function runTurnInner(
     }
   }
 
+  // A PASSAGE SHE QUOTED FROM THE PRE-SEARCH IS STILL A CITATION.
+  //
+  // `attempt.citations` only collects tool invocations, so once the pre-search
+  // existed a turn that used the seeded candidates and never called a tool
+  // reported citing nothing — the gate read it as scripture deferred, and the
+  // API returned an empty citations array to the client for a reply that quotes
+  // Matthew 5:23-24 in full.
+  const citedInReply = new Set(referencedPassages(attempt.reply));
+
+  const preSearchCitations = retrievedFromPreSearch
+    .filter((ref) => {
+      const key = referencedPassages(ref)[0];
+      return key !== undefined && citedInReply.has(key);
+    })
+    .filter((ref) => !attempt.citations.some((c) => c.ref === ref))
+    .map((ref) => ({ ref, passageId: null }));
+
   return {
     reply: attempt.reply || GROUNDING_FALLBACK,
     safetyIntercepted: false,
     safetyClassification: "none",
     premiseVerdict: premise.verdict,
     premise: premise.premise,
-    citations: attempt.citations,
+    citations: [...attempt.citations, ...preSearchCitations],
     toolCalls: attempt.toolCalls,
     modelUsed: chosenModel,
     costs,
