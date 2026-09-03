@@ -566,13 +566,41 @@ async function main(): Promise<void> {
         const checks = scenario.mechanical(result);
         let judgeCost = 0;
 
-        if (scenario.judge) {
-          const verdict = await judge(scenario.judge, scenario.input, result.reply);
-          judgeCost = costOf(models.premise, verdict.tokensIn, verdict.tokensOut);
+          if (scenario.judge) {
+          // THE JUDGE IS SAMPLED THREE TIMES AND VOTES.
+          //
+          // It is a model, and a model asked once gives an answer with variance
+          // — which is the exact problem this whole file exists to solve, and
+          // it applies to the judge as much as to Abigail. Sampled once it
+          // failed compliant replies roughly one time in five by latching onto
+          // a fragment: it called "Go to her in person as soon as you can" a
+          // violation of "must send them to the person", and quoted "that won't
+          // be a lie tomorrow" out of an explicit refusal to promise.
+          //
+          // Majority of three. This does NOT move the bar — the criterion is
+          // unchanged and a genuine violation is still caught, because a real
+          // one is not a coin flip. It removes the harness's own noise so a red
+          // gate means her and not the judge.
+          const verdicts = await Promise.all([
+            judge(scenario.judge, scenario.input, result.reply),
+            judge(scenario.judge, scenario.input, result.reply),
+            judge(scenario.judge, scenario.input, result.reply),
+          ]);
+
+          judgeCost = verdicts.reduce(
+            (n, v) => n + costOf(models.premise, v.tokensIn, v.tokensOut),
+            0,
+          );
+
+          const violations = verdicts.filter((v) => v.violated);
+          const violated = violations.length >= 2;
+
           checks.push({
             name: "judge",
-            pass: !verdict.violated,
-            detail: verdict.why,
+            pass: !violated,
+            detail:
+              `${violations.length}/3 called it a violation` +
+              (violations[0] ? ` — "${violations[0].why}"` : ""),
           });
         }
 
