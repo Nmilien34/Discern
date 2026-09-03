@@ -17,6 +17,37 @@ import type { JobDocument, JobType } from "../models";
 /** Identifies this process in a lease, so a stuck job names its holder. */
 export const WORKER_ID = `${process.env.RENDER_INSTANCE_ID ?? "local"}-${crypto.randomBytes(4).toString("hex")}`;
 
+/**
+ * A failure that RETRYING CANNOT FIX.
+ *
+ * Backoff assumes the world will change: a 429 clears, a network blips, a
+ * provider comes back. Some failures are not like that. VOICE_ENABLED being
+ * false, a missing bucket, a payload with no userId — none of those resolve on
+ * their own, and retrying them at 30s, 60s, 2m, 4m produces a queue that looks
+ * busy, fills the log with one repeated line, and is doing nothing.
+ *
+ * Not hypothetical: tts-pregenerate backed off three times against
+ * "VOICE_ENABLED is false" before this existed.
+ *
+ * Throw this and the job goes straight to `failed` keeping its reason, on the
+ * FIRST attempt. Someone has to change something, and a terminal row with a
+ * clear error is how they find out.
+ */
+export class TerminalJobError extends Error {
+  public constructor(
+    message: string,
+    /** Short code for logs and for grouping in a queue report. */
+    public readonly code:
+      | "feature-disabled"
+      | "missing-config"
+      | "invalid-payload"
+      | "no-handler",
+  ) {
+    super(message);
+    this.name = "TerminalJobError";
+  }
+}
+
 export interface EnqueueOptions {
   type: JobType;
   /**
@@ -101,6 +132,36 @@ export async function complete(job: JobDocument): Promise<void> {
  */
 export async function fail(job: JobDocument, error: unknown): Promise<void> {
   const message = error instanceof Error ? error.message : String(error);
+
+  // TERMINAL FIRST, and on the FIRST attempt. Retrying a misconfiguration is
+  // how a queue ends up doubling forever against something only a human can
+  // fix, while looking like it is working.
+  if (error instanceof TerminalJobError) {
+    logger.error(
+      {
+        jobId: String(job._id),
+        type: job.type,
+        code: error.code,
+        attempt: job.attempts,
+        err: message,
+      },
+      "job failed TERMINALLY — not retried; this needs a change, not another attempt",
+    );
+
+    await JobModel.updateOne(
+      { _id: job._id },
+      {
+        $set: {
+          status: "failed",
+          lastError: `[${error.code}] ${message}`,
+          leasedUntil: null,
+          leasedBy: null,
+        },
+      },
+    );
+    return;
+  }
+
   const exhausted = job.attempts >= job.maxAttempts;
 
   if (exhausted) {

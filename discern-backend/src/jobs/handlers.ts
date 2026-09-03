@@ -5,6 +5,7 @@
 // on work it may have partly done, so "already done" must be a no-op rather
 // than a duplicate.
 
+import { env } from "../config/env";
 import { logger } from "../lib/logger";
 import {
   ConversationModel,
@@ -23,7 +24,7 @@ import {
   isDue,
   markNotified,
 } from "./notifications";
-import { enqueue } from "./queue";
+import { enqueue, TerminalJobError } from "./queue";
 import { speakable } from "../services/speech/sentences";
 import { synthesize } from "../services/speech/tts";
 import { embedMissingPassages } from "./embedding-backfill";
@@ -60,6 +61,17 @@ const embeddingBackfill: JobHandler = async (job) => {
  *    because this spends money.
  */
 const ttsPregenerate: JobHandler = async (job) => {
+  // TERMINAL. VOICE_ENABLED does not become true because we waited 4 minutes.
+  // Before this check the job backed off 60s, 120s, 240s against a config
+  // value, doubling toward a queue that looks stuck.
+  if (!env.VOICE_ENABLED) {
+    throw new TerminalJobError(
+      "VOICE_ENABLED is false, so there is nothing to pregenerate. Set it and " +
+        "re-enqueue; retrying cannot turn a flag on.",
+      "feature-disabled",
+    );
+  }
+
   const limit = Math.min(Number(job.payload.limit ?? 20), 100);
 
   const cached = new Set(
@@ -96,9 +108,13 @@ const ttsPregenerate: JobHandler = async (job) => {
     });
 
     if (result?.refusedReason) {
-      // A ceiling refusal will refuse everything after it. Stop rather than
-      // burn the remaining attempts discovering that repeatedly.
-      logger.warn({ reason: result.refusedReason }, "tts pregeneration stopped by the ceiling");
+      // Not terminal: a DAILY ceiling clears at midnight, so this job simply
+      // stops and the next day's enqueue picks it up. Returning rather than
+      // throwing means it completes cleanly having done what it could.
+      logger.warn(
+        { reason: result.refusedReason, limit: result.refusedLimit, pregenerated: done },
+        "tts pregeneration stopped by the ceiling; resuming tomorrow",
+      );
       return;
     }
 
@@ -116,7 +132,17 @@ const ttsPregenerate: JobHandler = async (job) => {
  */
 const memorySummarize: JobHandler = async (job) => {
   const userId = String(job.payload.userId ?? "");
-  if (!userId) throw new Error("memory-summarize requires a userId");
+
+  // TERMINAL. A payload does not grow a userId on the third attempt.
+  if (!userId) {
+    throw new TerminalJobError(
+      "memory-summarize was enqueued without a userId in its payload.",
+      "invalid-payload",
+    );
+  }
+
+  // Everything below CAN fail transiently — an OpenAI 429, a Mongo blip — and
+  // those still retry with backoff, which is what backoff is for.
   await summarizeYesterday(userId);
 };
 

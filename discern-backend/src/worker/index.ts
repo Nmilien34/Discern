@@ -18,7 +18,7 @@ import { logger } from "../lib/logger";
 import "../models";
 import { reportVectorIndexStatus } from "../services/corpus/retrieval";
 import { HANDLERS, queueSnapshot, scheduleRecurring } from "../jobs/handlers";
-import { claim, complete, fail, WORKER_ID } from "../jobs/queue";
+import { claim, complete, fail, TerminalJobError, WORKER_ID } from "../jobs/queue";
 
 let stopping = false;
 
@@ -59,10 +59,18 @@ async function poller(index: number): Promise<void> {
     if (!handler) {
       // An unknown type is a deploy skew, not a transient fault. Fail it
       // permanently rather than retrying against code that does not exist.
+      // Terminal, not "pretend it exhausted its attempts". A job type this
+      // build has no code for is a deploy skew, and retrying it against the
+      // same build cannot help.
       jobLog.error("no handler registered for this job type");
-      await fail({ ...job, attempts: job.maxAttempts } as typeof job, new Error(
-        `No handler for job type "${job.type}"`,
-      ));
+      await fail(
+        job,
+        new TerminalJobError(
+          `No handler for job type "${job.type}". This build does not know how ` +
+            "to run it — check for a deploy skew between the API and worker.",
+          "no-handler",
+        ),
+      );
       continue;
     }
 
