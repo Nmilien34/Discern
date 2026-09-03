@@ -5,9 +5,12 @@ import {
 import { Router } from "express";
 
 import { asyncHandler } from "../lib/async-handler";
+import { NotFoundError } from "../lib/errors";
 import { sendData } from "../lib/responses";
 import { loadUser, requireAuth } from "../middleware/auth.middleware";
 import { validateBody } from "../middleware/validate.middleware";
+import { CarryingModel, PassageModel } from "../models";
+import { passageAudio } from "../services/speech/passage-audio";
 import {
   addCarrying,
   listCarryings,
@@ -71,5 +74,48 @@ carryingsRouter.patch(
       res,
       await updateCarrying(req.currentUser!._id, String(req.params.id), body),
     );
+  }),
+);
+
+/**
+ * GET /v1/carryings/:id/audio
+ *
+ * The passage read aloud. VOICE ATTACHES TO A CARRYING, not to a turn — a
+ * person opens what they are carrying and presses play, which is the moment an
+ * ear is actually useful. Her prose is never synthesized.
+ *
+ * On demand and permanently cached: the first listener pays for the audio and
+ * everyone after them does not.
+ */
+carryingsRouter.get(
+  "/:id/audio",
+  requireAuth,
+  loadUser,
+  asyncHandler(async (req, res) => {
+    const userId = req.currentUser!._id;
+
+    const carrying = await CarryingModel.findOne({
+      _id: String(req.params.id),
+      userId,
+    }).lean();
+
+    if (!carrying) throw new NotFoundError("You are not carrying that.");
+
+    const passage = await PassageModel.findById(carrying.refId)
+      .select("reference")
+      .lean();
+
+    if (!passage) throw new NotFoundError("That passage is no longer available.");
+
+    const query = req.query as { translation?: string };
+    const audio = await passageAudio(
+      passage.reference,
+      String(userId),
+      query.translation,
+    );
+
+    if (!audio) throw new NotFoundError("That passage cannot be read aloud.");
+
+    sendData(res, audio);
   }),
 );

@@ -14,7 +14,7 @@
 
 import crypto from "node:crypto";
 
-import { env } from "../../config/env";
+import { env, voiceConfig } from "../../config/env";
 import { logger } from "../../lib/logger";
 import { SpeechCacheModel } from "../../models";
 import { audioUrl, putAudio, speechKey } from "./storage";
@@ -52,7 +52,7 @@ function audioHash(text: string): string {
     .update(
       JSON.stringify({
         text: text.trim(),
-        voice: env.ELEVENLABS_VOICE_ID,
+        voice: voiceConfig().voiceId,
         model: env.ELEVENLABS_TTS_MODEL,
         settings: voiceSettings(),
       }),
@@ -117,11 +117,11 @@ export async function synthesize(
 
   try {
     const response = await fetch(
-      `${API}/text-to-speech/${env.ELEVENLABS_VOICE_ID}`,
+      `${API}/text-to-speech/${voiceConfig().voiceId}`,
       {
         method: "POST",
         headers: {
-          "xi-api-key": env.ELEVENLABS_API_KEY,
+          "xi-api-key": voiceConfig().apiKey,
           "Content-Type": "application/json",
           Accept: "audio/mpeg",
         },
@@ -152,7 +152,7 @@ export async function synthesize(
           hash,
           s3Key: key,
           characters: clean.length,
-          voiceId: env.ELEVENLABS_VOICE_ID,
+          voiceId: voiceConfig().voiceId,
           passageReference: options.passageReference ?? null,
         },
       },

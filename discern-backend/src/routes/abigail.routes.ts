@@ -24,15 +24,6 @@ const startConversationSchema = z
 const sendMessageSchema = z
   .object({
     content: z.string().min(1).max(8000),
-    /**
-     * Ask for the reply to be spoken as well as written.
-     *
-     * THE UPGRADE, NEVER THE DEFAULT (ARCHITECTURE.md §10 decision 1). Every
-     * route in this router already sits behind requireEntitlement, so asking
-     * for voice without a subscription never reaches here — and if synthesis is
-     * refused for any reason the turn still returns her reply in text.
-     */
-    voice: z.boolean().default(false),
   })
   .strict();
 
@@ -141,7 +132,7 @@ abigailRouter.post(
 
     if (!conversation) throw new NotFoundError("No such conversation.");
 
-    const { content, voice } = req.body as { content: string; voice: boolean };
+    const { content } = req.body as { content: string };
 
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-store");
@@ -164,7 +155,6 @@ abigailRouter.post(
 
     try {
       const result = await runTurn(userId, conversation._id, content, {
-        voice,
         onProgress: (event) => {
           if (!aborted) send("progress", event);
         },
@@ -181,9 +171,6 @@ abigailRouter.post(
         citations: result.citations.map((c) => c.ref),
         modelUsed: result.modelUsed,
         latencyMs: result.latencyMs,
-        // What this turn's audio cost, so spend is visible per conversation
-        // rather than only in aggregate.
-        speech: result.speech,
       });
     } catch (error) {
       // The stream has already been committed with a 200, so a failure cannot

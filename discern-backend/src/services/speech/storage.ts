@@ -13,7 +13,7 @@
 import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
-import { env } from "../../config/env";
+import { voiceConfig } from "../../config/env";
 
 /** Long enough to fetch and play, short enough that a leaked URL is worthless. */
 const PRESIGN_TTL_SECONDS = 60 * 60;
@@ -21,11 +21,12 @@ const PRESIGN_TTL_SECONDS = 60 * 60;
 let client: S3Client | null = null;
 
 function s3(): S3Client {
+  const config = voiceConfig();
   return (client ??= new S3Client({
-    region: env.AWS_REGION,
+    region: config.region,
     credentials: {
-      accessKeyId: env.AWS_ACCESS_KEY_ID,
-      secretAccessKey: env.AWS_SECRET_ACCESS_KEY,
+      accessKeyId: config.accessKeyId,
+      secretAccessKey: config.secretAccessKey,
     },
   }));
 }
@@ -46,7 +47,7 @@ export async function putAudio(
 ): Promise<void> {
   await s3().send(
     new PutObjectCommand({
-      Bucket: env.S3_BUCKET,
+      Bucket: voiceConfig().bucket,
       Key: key,
       Body: body,
       ContentType: contentType,
@@ -61,7 +62,7 @@ export async function putAudio(
 export async function audioUrl(key: string): Promise<string> {
   return getSignedUrl(
     s3(),
-    new GetObjectCommand({ Bucket: env.S3_BUCKET, Key: key }),
+    new GetObjectCommand({ Bucket: voiceConfig().bucket, Key: key }),
     { expiresIn: PRESIGN_TTL_SECONDS },
   );
 }

@@ -10,7 +10,7 @@
 // length against the encoding's bitrate and reconciled after — an
 // over-estimate reserves too much and refunds, which errs toward the ceiling.
 
-import { env } from "../../config/env";
+import { env, voiceConfig } from "../../config/env";
 import { logger } from "../../lib/logger";
 import { releaseSpeechSpend, reserveSpeechSpend } from "./spend";
 
@@ -53,7 +53,7 @@ export async function transcribe(
 
     const response = await fetch(`${API}/speech-to-text`, {
       method: "POST",
-      headers: { "xi-api-key": env.ELEVENLABS_API_KEY },
+      headers: { "xi-api-key": voiceConfig().apiKey },
       body: form,
     });
 

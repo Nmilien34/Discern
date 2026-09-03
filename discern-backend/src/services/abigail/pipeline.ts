@@ -25,8 +25,6 @@ import {
 } from "../../models";
 import { UpstreamUnavailableError } from "../../lib/errors";
 import { recordSeedEvent } from "../journey/seed.service";
-import { SentenceSplitter, speakable } from "../speech/sentences";
-import { synthesize } from "../speech/tts";
 import { classifyForSafety } from "../safety/classifier";
 import { openaiFor } from "../../lib/openai-client";
 import {
@@ -83,8 +81,6 @@ export type TurnProgress =
   | { type: "writing" }
   /** The reply is being replaced — grounding or the passage cap fired. */
   | { type: "restart"; reason: string }
-  /** A sentence has been synthesized and can play now. */
-  | { type: "audio"; url: string; text: string; cached: boolean; index: number }
   /** Voice is off for this turn. She still answers, in text. */
   | { type: "audio-unavailable"; reason: string };
 
@@ -93,15 +89,6 @@ export interface TurnOptions {
   onProgress?: (event: TurnProgress) => void;
   /** Called with each text delta of the reply as the model emits it. */
   onToken?: (text: string) => void;
-  /**
-   * Synthesize each sentence as she finishes it.
-   *
-   * VOICE IS THE UPGRADE, NEVER THE DEFAULT (ARCHITECTURE.md §10 decision 1),
-   * so this is off unless a caller asks and the caller has checked entitlement.
-   * Synthesis happens per sentence rather than per reply because waiting for
-   * the whole reply would add a second wait on top of a forty-nine second one.
-   */
-  voice?: boolean;
 }
 
 export interface TurnCost {
@@ -126,16 +113,6 @@ export interface TurnResult {
   fellBack: boolean;
   /** True when the reply had to be regenerated for referencing too many passages. */
   citationCapRegenerated: boolean;
-  /** What voice cost on this turn. Zero on a text turn, and zero on cache hits. */
-  speech: {
-    requested: boolean;
-    sentences: number;
-    charactersSynthesized: number;
-    charactersFromCache: number;
-    /** null when voice was not requested or was never refused. */
-    refusedReason: string | null;
-    audioKeys: string[];
-  };
   /** Reasoning rounds actually spent. Each one is a model call. */
   reasoningRounds: number;
   /**
@@ -240,81 +217,6 @@ async function runTurnInner(
     }
   };
 
-  // ---- VOICE, SENTENCE BY SENTENCE -----------------------------------------
-  //
-  // Synthesis runs ALONGSIDE writing rather than after it. She streams tokens;
-  // each completed sentence is sent for synthesis immediately, so the first
-  // audio plays while she is still on the second paragraph.
-  //
-  // Deliberately fire-and-forget: a synthesis that is slow, refused, or failing
-  // must never hold up the text, which is the product. Voice is the upgrade.
-  const speech = {
-    requested: options.voice === true,
-    sentences: 0,
-    charactersSynthesized: 0,
-    charactersFromCache: 0,
-    refusedReason: null as string | null,
-    audioKeys: [] as string[],
-  };
-
-  const splitter = new SentenceSplitter();
-  const pendingAudio: Promise<void>[] = [];
-  let audioIndex = 0;
-
-  const speakSentence = (sentence: string): void => {
-    const text = speakable(sentence);
-    if (!text) return;
-
-    // Once refused, stop asking. A ceiling that is tripped stays tripped for
-    // the day, and re-asking per sentence is the retry loop it exists to stop.
-    if (speech.refusedReason) return;
-
-    const index = audioIndex;
-    audioIndex += 1;
-
-    pendingAudio.push(
-      synthesize(text, String(userId))
-        .then((result) => {
-          if (!result) return;
-
-          if (result.refusedReason) {
-            speech.refusedReason = result.refusedReason;
-            progress({ type: "audio-unavailable", reason: result.refusedReason });
-            return;
-          }
-
-          speech.sentences += 1;
-          speech.audioKeys.push(result.s3Key);
-          if (result.cached) speech.charactersFromCache += result.characters;
-          else speech.charactersSynthesized += result.characters;
-
-          progress({
-            type: "audio",
-            url: result.url,
-            text,
-            cached: result.cached,
-            index,
-          });
-        })
-        .catch((error: unknown) => {
-          logger.warn(
-            { err: error instanceof Error ? error.message : error },
-            "sentence synthesis failed; the turn continues in text",
-          );
-        }),
-    );
-  };
-
-  const originalOnToken = options.onToken;
-
-  const onToken = speech.requested
-    ? (delta: string): void => {
-        originalOnToken?.(delta);
-        for (const sentence of splitter.push(delta)) speakSentence(sentence);
-      }
-    : originalOnToken;
-
-  const voiceOptions: TurnOptions = { ...options, onToken };
   // ---- 1. SAFETY GATE ------------------------------------------------------
   const safety = await classifyForSafety(userMessage);
   costs.push({
@@ -341,17 +243,6 @@ async function runTurnInner(
       reply: safety.response ?? "",
       safetyIntercepted: true,
       citationCapRegenerated: false,
-      // Crisis resources are NOT read aloud. The written response exists so the
-      // app gets out of the way; a synthesized voice reading a hotline number
-      // to someone in crisis is the app inserting itself again.
-      speech: {
-        requested: false,
-        sentences: 0,
-        charactersSynthesized: 0,
-        charactersFromCache: 0,
-        refusedReason: null,
-        audioKeys: [],
-      },
       roundTimings: [],
       safetyClassification: safety.classification,
       premiseVerdict: "not-run",
@@ -565,7 +456,7 @@ async function runTurnInner(
           }
           content += delta.content;
           try {
-            voiceOptions.onToken?.(delta.content);
+            options.onToken?.(delta.content);
           } catch {
             // A disconnected client must not fail the turn.
           }
@@ -834,16 +725,6 @@ async function runTurnInner(
     }
   }
 
-  // The last sentence usually has no trailing whitespace to trigger a boundary,
-  // so it is flushed explicitly or the closing line is never spoken.
-  if (speech.requested) {
-    const tail = splitter.flush();
-    if (tail) speakSentence(tail);
-    // Settle before returning: the caller reports what voice cost, and a
-    // promise still in flight is a number that is wrong.
-    await Promise.allSettled(pendingAudio);
-  }
-
   // A PASSAGE SHE QUOTED FROM THE PRE-SEARCH IS STILL A CITATION.
   //
   // `attempt.citations` only collects tool invocations, so once the pre-search
@@ -876,14 +757,6 @@ async function runTurnInner(
     regenerated,
     fellBack,
     citationCapRegenerated,
-    speech: {
-      requested: speech.requested,
-      sentences: speech.sentences,
-      charactersSynthesized: speech.charactersSynthesized,
-      charactersFromCache: speech.charactersFromCache,
-      refusedReason: speech.refusedReason,
-      audioKeys: speech.audioKeys,
-    },
     reasoningRounds: attempt.rounds,
     roundTimings: attempt.timings,
   };

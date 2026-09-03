@@ -225,12 +225,23 @@ const envSchema = z.object({
   OPENAI_API_KEY: z.string().min(1, "OPENAI_API_KEY is required"),
 
   /** Required from PHASE 7 (voice). Optional before that. */
-  // REQUIRED FROM PHASE 7. The Phase 2 amendment made provider keys
-  // optional-but-validated until the phase that uses them; this is that phase.
-  // A service that boots without them would accept a voice conversation and
-  // fail at the moment someone speaks.
-  ELEVENLABS_API_KEY: z.string().min(1),
-  ELEVENLABS_VOICE_ID: z.string().min(1),
+  /**
+   * Is voice switched on for this deployment?
+   *
+   * THE GATE ON EVERY OTHER VOICE VARIABLE. The first cut of Phase 7 made
+   * ELEVENLABS_* and the S3 keys unconditionally required, which meant merging
+   * a voice phase bricked the API's boot until an unrelated bucket existed —
+   * a trap for whoever deploys next, and a phase that cannot be shipped dark.
+   *
+   * False is the default and the safe state: the service boots, text works,
+   * and every voice route reports that voice is off rather than 500ing.
+   */
+  VOICE_ENABLED: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
+
+  // Required only when VOICE_ENABLED is true — enforced below, after parsing,
+  // so the error names the flag rather than listing five keys with no reason.
+  ELEVENLABS_API_KEY: z.string().min(1).optional(),
+  ELEVENLABS_VOICE_ID: z.string().min(1).optional(),
   /** Model for synthesis. Config, not a constant — quality/latency tiers move. */
   ELEVENLABS_TTS_MODEL: z.string().min(1).default("eleven_turbo_v2_5"),
   /** Model for transcription. */
@@ -253,18 +264,19 @@ const envSchema = z.object({
   // scales with one user's enthusiasm, and the failure it guards against is not
   // a busy subscriber — it is a retry loop against a per-character API.
   //
-  // DEFAULTS TIGHTENED AFTER MEASURING. The first pass allowed 60,000
-  // characters per user per day, which at the configured rate is $18.00 — the
-  // entire annual revenue from that subscriber in 1.6 days.
+  // RELAXED, because the ceiling changed jobs.
   //
-  // Measured: a reply is ~1,431 speakable characters, so a spoken reply costs
-  // about $0.43 against $0.018 for the same turn in text. 12,000 characters is
-  // roughly eight spoken replies a day, which is more than a real person has
-  // and still $3.60 — so this is a RUNAWAY GUARD, not an economic fix. The
-  // economics need a cheaper rate or a smaller unit of speech; see the Phase 7
-  // report. A ceiling cannot make a 24x cost multiplier work.
-  TTS_DAILY_CHARS_PER_USER: z.coerce.number().int().positive().default(12_000),
-  TTS_DAILY_CHARS_GLOBAL: z.coerce.number().int().positive().default(300_000),
+  // While TTS spoke Abigail's prose this was the last line against the business
+  // model: every reply was a fresh $0.43 bill and no cache could help, because
+  // no two replies are the same. Now that only SCRIPTURE is spoken, a passage
+  // is paid for once and heard forever — a cache hit never reaches here at all.
+  //
+  // So this guards a BUG: a client looping the audio endpoint against
+  // uncached passages. 40,000 characters is roughly forty first-listens in a
+  // day, which no person does and a loop does in seconds. The whole corpus is
+  // 3.9M characters, so the global cap is a hard floor under the worst case.
+  TTS_DAILY_CHARS_PER_USER: z.coerce.number().int().positive().default(40_000),
+  TTS_DAILY_CHARS_GLOBAL: z.coerce.number().int().positive().default(500_000),
   STT_DAILY_SECONDS_PER_USER: z.coerce.number().int().positive().default(1_800),
   STT_DAILY_SECONDS_GLOBAL: z.coerce.number().int().positive().default(72_000),
   /** Longest single synthesis. A runaway reply must not be one huge bill. */
@@ -317,9 +329,9 @@ const envSchema = z.object({
       }),
     )
     .optional(),
-  // REQUIRED FROM PHASE 7: synthesized audio lives in S3, never in Mongo.
-  AWS_ACCESS_KEY_ID: z.string().min(1),
-  AWS_SECRET_ACCESS_KEY: z.string().min(1),
+  // Required only when VOICE_ENABLED is true: synthesized audio lives in S3.
+  AWS_ACCESS_KEY_ID: z.string().min(1).optional(),
+  AWS_SECRET_ACCESS_KEY: z.string().min(1).optional(),
   // S3 bucket naming rules, checked here rather than at first upload: 3-63
   // characters, lowercase letters/digits/hyphens/dots, must start and end
   // alphanumeric. An invalid name fails every request with an opaque SDK error.
@@ -336,7 +348,8 @@ const envSchema = z.object({
           "lowercase letters, digits, hyphens and dots, starting and ending " +
           "alphanumeric).",
       }),
-    ),
+    )
+    .optional(),
 
   // ---- RevenueCat: REQUIRED FROM PHASE 4 -----------------------------------
   // Shared secret, timing-safe compared at the webhook. NOT byte-validated: the
@@ -477,6 +490,40 @@ if (!parsed.success) {
 }
 
 export const env = parsed.data;
+
+/**
+ * VOICE_ENABLED implies its dependencies.
+ *
+ * Checked here rather than in the schema so the message can say WHY these five
+ * are needed. A deployment with voice off boots without any of them, which is
+ * the point: Phase 7 must be shippable dark.
+ */
+if (env.VOICE_ENABLED) {
+  const required = {
+    ELEVENLABS_API_KEY: env.ELEVENLABS_API_KEY,
+    ELEVENLABS_VOICE_ID: env.ELEVENLABS_VOICE_ID,
+    AWS_ACCESS_KEY_ID: env.AWS_ACCESS_KEY_ID,
+    AWS_SECRET_ACCESS_KEY: env.AWS_SECRET_ACCESS_KEY,
+    S3_BUCKET: env.S3_BUCKET,
+  };
+
+  const absent = Object.entries(required)
+    .filter(([, value]) => !value)
+    .map(([key]) => key);
+
+  if (absent.length > 0) {
+    throw new Error(
+      [
+        "VOICE_ENABLED is true but voice cannot work without:",
+        "",
+        ...absent.map((key) => `  ${key}`),
+        "",
+        "  Either set them, or set VOICE_ENABLED=false to run without voice.",
+        "  Text works either way — voice is the upgrade, not the product.",
+      ].join("\n"),
+    );
+  }
+}
 export type Env = typeof env;
 
 export const isProduction = env.NODE_ENV === "production";
@@ -571,4 +618,45 @@ export function requireRevenueCatWebhookSecret(): string {
   }
 
   return env.REVENUECAT_WEBHOOK_SECRET;
+}
+
+/**
+ * The voice configuration, or a thrown error.
+ *
+ * Every voice call site goes through this rather than reading `env.*` and
+ * asserting non-null. One place decides what "voice is configured" means, and
+ * a caller that forgets the flag gets a message naming it instead of a
+ * confusing undefined deep inside an AWS client.
+ */
+export function voiceConfig(): {
+  apiKey: string;
+  voiceId: string;
+  accessKeyId: string;
+  secretAccessKey: string;
+  bucket: string;
+  region: string;
+} {
+  if (
+    !env.VOICE_ENABLED ||
+    !env.ELEVENLABS_API_KEY ||
+    !env.ELEVENLABS_VOICE_ID ||
+    !env.AWS_ACCESS_KEY_ID ||
+    !env.AWS_SECRET_ACCESS_KEY ||
+    !env.S3_BUCKET
+  ) {
+    throw new Error(
+      "Voice is not configured on this deployment (VOICE_ENABLED is false or " +
+        "its keys are unset). Callers should check `env.VOICE_ENABLED` and " +
+        "offer text instead of reaching this.",
+    );
+  }
+
+  return {
+    apiKey: env.ELEVENLABS_API_KEY,
+    voiceId: env.ELEVENLABS_VOICE_ID,
+    accessKeyId: env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: env.AWS_SECRET_ACCESS_KEY,
+    bucket: env.S3_BUCKET,
+    region: env.AWS_REGION as string,
+  };
 }
