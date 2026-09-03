@@ -29,6 +29,20 @@ export interface PremiseResult {
   correction: string | null;
   /** What the person is asking underneath the question they asked. */
   realQuestion: string;
+  /**
+   * A TURN-SPECIFIC INSTRUCTION for Abigail, written for this conversation.
+   *
+   * The premise pass already sees things the system prompt can only describe in
+   * general — that this person has placed the whole problem on someone else,
+   * that they are asking for a promise nobody can make. Until now that only
+   * picked a model and filled in context.
+   *
+   * A standing prompt line competes with thirty other standing prompt lines and
+   * loses about one time in five. An instruction written for THIS turn, naming
+   * THIS person's shape, does not. Null when the turn needs no special handling,
+   * which is most of them — a directive on every turn is a directive on none.
+   */
+  directive: string | null;
   modelUsed: string;
   tokensIn: number;
   tokensOut: number;
@@ -47,12 +61,13 @@ const SYSTEM_PROMPT: string = prompts.premiseSystem;
 const RESPONSE_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["premise", "verdict", "correction", "realQuestion"],
+  required: ["premise", "verdict", "correction", "realQuestion", "directive"],
   properties: {
     premise: { type: "string" },
     verdict: { type: "string", enum: ["sound", "incomplete", "wrong", "unclear"] },
     correction: { type: ["string", "null"] },
     realQuestion: { type: "string" },
+    directive: { type: ["string", "null"] },
   },
 } as const;
 
@@ -115,6 +130,7 @@ export async function runPremisePass(
       verdict: "unclear",
       correction: null,
       realQuestion: userMessage,
+      directive: null,
       modelUsed: models.premise,
       tokensIn: 0,
       tokensOut: 0,

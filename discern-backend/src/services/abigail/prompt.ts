@@ -46,6 +46,26 @@ export const ABIGAIL_SYSTEM_PROMPT: string = prompts.abigailSystem;
 export function buildContextMessage(context: PromptContext): string {
   const parts: string[] = [];
 
+  // THE DIRECTIVE GOES FIRST, ABOVE EVERYTHING.
+  //
+  // It is written for THIS turn by the pass that just read what they said, and
+  // it exists because a standing prompt line loses. "Ask about their own part"
+  // sits in the system prompt competing with thirty other rules and was obeyed
+  // four times in five; the fifth reply cited Matthew 18's process and never
+  // asked the man what he had done. An instruction written for this person,
+  // placed where nothing else is, does not get averaged away.
+  //
+  // Null on most turns, which is what keeps it load-bearing on the few.
+  if (context.premise.directive) {
+    parts.push(
+      "=== DO THIS FIRST, BEFORE ANYTHING ELSE ===",
+      context.premise.directive,
+      "This was written for this specific turn after reading what they said. It",
+      "takes priority over the general guidance in your instructions.",
+      "",
+    );
+  }
+
   parts.push("=== PREMISE ANALYSIS (not visible to them) ===");
   if (context.premise.premise) {
     parts.push(`They are assuming: ${context.premise.premise}`);
