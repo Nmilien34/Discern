@@ -39,8 +39,19 @@ export interface UserEntitlementDocument {
 
 export interface UserPreferencesDocument {
   translationId: Types.ObjectId | null;
-  /** "HH:MM" in the user's own zone. Phase 8 schedules against it. */
+  /**
+   * "HH:MM" in the user's own zone, or null.
+   *
+   * NULL IS THE DEFAULT AND NULL MEANS SILENCE. There is no daily default and
+   * no opt-out — a person who has not chosen a time is never notified. An app
+   * whose thesis is that you sit with one thing does not get to interrupt you
+   * on a schedule you did not pick.
+   */
   notificationTime: string | null;
+  /** IANA zone. Without it "8pm" is 8pm somewhere else. */
+  timezone: string | null;
+  /** Expo/APNs token, or null. Set by the app, cleared when it goes stale. */
+  pushToken: string | null;
   voiceEnabled: boolean;
 }
 
@@ -73,6 +84,8 @@ export interface UserDocument extends Document<Types.ObjectId> {
    */
   mergedIntoUserId: Types.ObjectId | null;
   lastActiveAt: Date;
+  /** Enforces at most one notification a day. Null until the first one. */
+  lastNotifiedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -109,6 +122,8 @@ const preferencesSchema = new Schema<UserPreferencesDocument>(
       default: null,
     },
     notificationTime: { type: String, default: null },
+    timezone: { type: String, default: null },
+    pushToken: { type: String, default: null },
     voiceEnabled: { type: Boolean, required: true, default: false },
   },
   { _id: false },
@@ -126,6 +141,7 @@ const userSchema = new Schema<UserDocument>(
     abigailConversationsStarted: { type: Number, required: true, default: 0, min: 0 },
     mergedIntoUserId: { type: Schema.Types.ObjectId, ref: "User", default: null },
     lastActiveAt: { type: Date, required: true, default: () => new Date() },
+    lastNotifiedAt: { type: Date, default: null },
   },
   { timestamps: true, versionKey: false },
 );

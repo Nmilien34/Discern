@@ -13,6 +13,7 @@ export * from "./safety-event.model";
 export * from "./seed-event.model";
 export * from "./stage.model";
 export * from "./translation.model";
+export * from "./job.model";
 export * from "./speech-usage.model";
 export * from "./speech-cache.model";
 export * from "./user.model";

@@ -166,3 +166,32 @@ export const meResponseSchema = z
   .strict();
 
 export type MeResponse = z.infer<typeof meResponseSchema>;
+
+/**
+ * PUT /v1/me/notifications
+ *
+ * A push token and a chosen time are SEPARATE decisions. Registering a device
+ * subscribes nobody to anything; `notificationTime` is the consent, and null —
+ * the shipped default — means silence.
+ */
+export const notificationPreferencesSchema = z
+  .object({
+    /** Expo/APNs token. Null clears a stale one. */
+    pushToken: z.string().min(1).max(512).nullable().optional(),
+    /**
+     * "HH:MM", 24-hour, in the user's own zone. NULL MEANS NEVER, and null is
+     * the default — there is no daily default to turn off.
+     */
+    notificationTime: z
+      .string()
+      .regex(/^([01]\d|2[0-3]):([0-5]\d)$/, "notificationTime must be HH:MM")
+      .nullable()
+      .optional(),
+    /** IANA zone, e.g. "America/New_York". Without it a time means nothing. */
+    timezone: z.string().min(1).max(64).nullable().optional(),
+  })
+  .strict();
+
+export type NotificationPreferencesRequest = z.infer<
+  typeof notificationPreferencesSchema
+>;
