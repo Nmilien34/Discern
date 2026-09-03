@@ -75,6 +75,12 @@ export const models: ModelTiers = {
   premise: env.PREMISE_MODEL ?? "gpt-5-mini",
   conversation: env.CONVERSATION_MODEL ?? "gpt-5-mini",
   reasoning: env.REASONING_MODEL ?? "gpt-5",
+  // NANO, matching the safety tier. At the conversation tier this call took
+  // 10.9s and emitted 429-795 output tokens to produce three sentences; at
+  // minimal effort on the same tier, 1.9s and 85 tokens. There is no reason a
+  // query rewriter should sit two tiers above the classifier that gates every
+  // turn. Guarded by the Phase 3 gate: query 1 must still return
+  // Ephesians 2:8-10 in the top 3 (npm run compare).
   hyde: env.HYDE_MODEL ?? "gpt-5-mini",
   embedding: env.EMBEDDING_MODEL ?? "text-embedding-3-large",
 };
@@ -122,8 +128,18 @@ export const effort: EffortTiers = {
   // The tier that writes most replies.
   conversation: (env.CONVERSATION_EFFORT as ReasoningEffort) ?? "low",
   reasoning: (env.REASONING_EFFORT as ReasoningEffort) ?? "medium",
-  // Turning a sentence into passage-shaped text. Nothing to deliberate over.
-  hyde: (env.HYDE_EFFORT as ReasoningEffort) ?? "minimal",
+  // MEASURED AGAINST THE PHASE 3 RETRIEVAL GATE, which is the only thing that
+  // can see this. "Turning a sentence into passage-shaped text" sounds like it
+  // needs no deliberation; the gate disagrees:
+  //
+  //   gpt-5-nano  + minimal   FAIL   Ephesians 2:8-10 not in the top 3
+  //   gpt-5-mini  + minimal   PASS   rank 3  (degraded)
+  //   gpt-5-mini  + low       PASS   rank 2  (the Phase 3 result)
+  //
+  // The rewrite is what puts the right passage in front of her, so a rank drop
+  // here is worse scripture reaching a person — invisible to eval:critical,
+  // which tests how she answers rather than what she was given.
+  hyde: (env.HYDE_EFFORT as ReasoningEffort) ?? "low",
 };
 
 export type ModelTier = keyof ModelTiers;

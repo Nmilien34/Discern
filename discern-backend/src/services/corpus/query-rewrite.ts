@@ -80,9 +80,12 @@ export async function rewriteQueryForRetrieval(
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: query },
       ],
-      // Reasoning models spend tokens before emitting anything; a budget sized
-      // for three sentences comes back empty with finish_reason "length".
-      max_completion_tokens: 4_000,
+      // HARD CAP. 4,000 was sized for a reasoning model that spends most of its
+      // budget before emitting anything; at minimal effort the measured output
+      // is ~85 tokens. 800 leaves an order of magnitude of headroom and bounds
+      // the worst case, and an empty result falls back to the original query
+      // rather than failing the search.
+      max_completion_tokens: 800,
     });
 
     const usage = {
