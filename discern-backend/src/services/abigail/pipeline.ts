@@ -14,7 +14,7 @@
 import OpenAI from "openai";
 import type { Types } from "mongoose";
 
-import { models } from "../../config/models";
+import { effort, models } from "../../config/models";
 import { logger } from "../../lib/logger";
 import {
   ConversationModel,
@@ -297,6 +297,11 @@ async function runTurnInner(
       const modelStartedAt = Date.now();
       const response = await getClient().chat.completions.create({
         model: chosenModel,
+        // Matched to the tier that was routed to, not to a constant: the cheap
+        // tier answers most turns and does not need an extended chain, while a
+        // `wrong` premise is the one case worth paying for.
+        reasoning_effort:
+          chosenModel === models.reasoning ? effort.reasoning : effort.conversation,
         messages,
         ...(isFinalRound
           ? { tools: TOOL_DEFINITIONS, tool_choice: "none" as const }

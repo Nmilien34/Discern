@@ -39,6 +39,17 @@ export interface ModelTiers {
   reasoning: string;
 
   /**
+   * The HyDE query rewrite that runs before every vector search.
+   *
+   * Its own tier rather than borrowing `conversation`, because the two jobs are
+   * nothing alike: one holds a conversation, the other turns a sentence into
+   * passage-shaped text. Measured on Render at the conversation tier it took
+   * 5.4-12.5s and emitted 429-795 OUTPUT tokens for a one-line rewrite — which
+   * is a reasoning model thinking hard about a task that does not need it.
+   */
+  hyde: string;
+
+  /**
    * Corpus and query embeddings.
    *
    * CHANGING THIS INVALIDATES THE INDEX. Every passage and hymn records the
@@ -64,7 +75,47 @@ export const models: ModelTiers = {
   premise: env.PREMISE_MODEL ?? "gpt-5-mini",
   conversation: env.CONVERSATION_MODEL ?? "gpt-5-mini",
   reasoning: env.REASONING_MODEL ?? "gpt-5",
+  hyde: env.HYDE_MODEL ?? "gpt-5-mini",
   embedding: env.EMBEDDING_MODEL ?? "text-embedding-3-large",
+};
+
+/**
+ * How hard each tier is allowed to think.
+ *
+ * THIS WAS UNSET EVERYWHERE UNTIL 2026-09-02, so every call ran at the API's
+ * default. On the gpt-5 family that default is not cheap: individual reasoning
+ * rounds measured 3-51 seconds on Render, and the query rewriter — a job whose
+ * entire output is three sentences — was spending the better part of a thousand
+ * output tokens getting there.
+ *
+ * Effort is the first thing to turn down and the first thing to turn back up,
+ * which is why it is config rather than a literal at each call site. Every value
+ * below is overridable by env, so a regression is a dashboard change and not a
+ * deploy.
+ *
+ * `minimal` is not "no thinking" — it is "answer without an extended chain".
+ * For classification and rewriting that is the whole job.
+ */
+export type ReasoningEffort = "minimal" | "low" | "medium" | "high";
+
+export interface EffortTiers {
+  safety: ReasoningEffort;
+  premise: ReasoningEffort;
+  conversation: ReasoningEffort;
+  reasoning: ReasoningEffort;
+  hyde: ReasoningEffort;
+}
+
+export const effort: EffortTiers = {
+  // Pure classification against a fixed enum. There is nothing to reason about.
+  safety: (env.SAFETY_EFFORT as ReasoningEffort) ?? "minimal",
+  // A judgement, but a narrow one, and its prompt does the heavy lifting.
+  premise: (env.PREMISE_EFFORT as ReasoningEffort) ?? "low",
+  // The tier that writes most replies.
+  conversation: (env.CONVERSATION_EFFORT as ReasoningEffort) ?? "low",
+  reasoning: (env.REASONING_EFFORT as ReasoningEffort) ?? "medium",
+  // Turning a sentence into passage-shaped text. Nothing to deliberate over.
+  hyde: (env.HYDE_EFFORT as ReasoningEffort) ?? "minimal",
 };
 
 export type ModelTier = keyof ModelTiers;

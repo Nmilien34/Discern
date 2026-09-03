@@ -237,6 +237,18 @@ const envSchema = z.object({
   CONVERSATION_MODEL: z.string().optional(),
   REASONING_MODEL: z.string().optional(),
   EMBEDDING_MODEL: z.string().optional(),
+  HYDE_MODEL: z.string().optional(),
+
+  // ---- Reasoning effort per tier -------------------------------------------
+  //
+  // Unset everywhere until 2026-09-02, so every call ran at the API default and
+  // paid for an extended reasoning chain whether or not the job needed one.
+  // Overridable so a quality regression can be reverted from the dashboard.
+  SAFETY_EFFORT: z.enum(["minimal", "low", "medium", "high"]).optional(),
+  PREMISE_EFFORT: z.enum(["minimal", "low", "medium", "high"]).optional(),
+  CONVERSATION_EFFORT: z.enum(["minimal", "low", "medium", "high"]).optional(),
+  REASONING_EFFORT: z.enum(["minimal", "low", "medium", "high"]).optional(),
+  HYDE_EFFORT: z.enum(["minimal", "low", "medium", "high"]).optional(),
 
   // ---- Object storage: S3, bucket discern-audio (PHASE 7) ------------------
   // Mongo stores the S3 key only, never the blob (ARCHITECTURE.md §4).

@@ -16,7 +16,7 @@
 
 import OpenAI from "openai";
 
-import { models } from "../../config/models";
+import { effort, models } from "../../config/models";
 import { logger } from "../../lib/logger";
 import { openaiFor } from "../../lib/openai-client";
 
@@ -74,7 +74,8 @@ export async function rewriteQueryForRetrieval(
 ): Promise<QueryRewriteResult> {
   try {
     const response = await getClient().chat.completions.create({
-      model: models.conversation,
+      model: models.hyde,
+      reasoning_effort: effort.hyde,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: query },
@@ -96,14 +97,14 @@ export async function rewriteQueryForRetrieval(
         { finishReason: response.choices[0]?.finish_reason },
         "query rewrite returned nothing; using the original query",
       );
-      return { text: query, model: models.conversation, tokensIn: usage.tokensIn, tokensOut: usage.tokensOut };
+      return { text: query, model: models.hyde, tokensIn: usage.tokensIn, tokensOut: usage.tokensOut };
     }
 
     // Both, not just the rewrite. The hypothetical text can drift off-topic, and
     // keeping the original anchors the embedding to what was actually asked.
     return {
       text: `${query}\n${text}`,
-      model: models.conversation,
+      model: models.hyde,
       tokensIn: usage.tokensIn,
       tokensOut: usage.tokensOut,
     };
@@ -112,6 +113,6 @@ export async function rewriteQueryForRetrieval(
       { err: error instanceof Error ? error.message : error },
       "query rewrite failed; using the original query",
     );
-    return { text: query, model: models.conversation, tokensIn: 0, tokensOut: 0 };
+    return { text: query, model: models.hyde, tokensIn: 0, tokensOut: 0 };
   }
 }

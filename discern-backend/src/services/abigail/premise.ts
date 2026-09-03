@@ -15,7 +15,7 @@
 
 import OpenAI from "openai";
 
-import { models } from "../../config/models";
+import { effort, models } from "../../config/models";
 import { prompts } from "../../config/prompts";
 import { logger } from "../../lib/logger";
 import { openaiFor } from "../../lib/openai-client";
@@ -75,6 +75,7 @@ export async function runPremisePass(
       // MID tier (ARCHITECTURE.md §7). Naming a wrong assumption is a judgement,
       // not a classification, and the cheapest model is not good enough at it.
       model: models.premise,
+      reasoning_effort: effort.premise,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: `They said: "${userMessage}"${recent}` },

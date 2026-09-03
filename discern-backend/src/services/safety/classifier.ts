@@ -17,7 +17,7 @@
 
 import OpenAI from "openai";
 
-import { models } from "../../config/models";
+import { effort, models } from "../../config/models";
 import { logger } from "../../lib/logger";
 import type { SafetyClassification } from "../../models";
 import { openaiFor } from "../../lib/openai-client";
@@ -180,6 +180,7 @@ export async function classifyForSafety(
       // The CHEAPEST tier (ARCHITECTURE.md §7): this runs on every single turn
       // and the user is waiting on it.
       model: models.safety,
+      reasoning_effort: effort.safety,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: message },
