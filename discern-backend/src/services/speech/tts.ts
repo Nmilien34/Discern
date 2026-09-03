@@ -67,6 +67,15 @@ export interface SynthesisResult {
   cached: boolean;
   /** Set when the ceiling refused. The caller shows this and stays on text. */
   refusedReason?: string;
+  /**
+   * WHICH ceiling refused, so a caller can tell a one-off from a stop.
+   *
+   * "per-request" means THIS passage is too long and the next one may be fine.
+   * "user-daily" and "global-daily" mean everything after this is refused too.
+   * A bulk run that cannot tell them apart stops on the first long passage —
+   * which is exactly what happened to the corpus pregeneration at 952 of 3,879.
+   */
+  refusedLimit?: "user-daily" | "global-daily" | "per-request";
 }
 
 /**
@@ -79,7 +88,7 @@ export interface SynthesisResult {
 export async function synthesize(
   text: string,
   userId: string,
-  options: { passageReference?: string } = {},
+  options: { passageReference?: string; translationId?: string } = {},
 ): Promise<SynthesisResult | null> {
   const clean = text.trim();
   if (!clean) return null;
@@ -112,6 +121,7 @@ export async function synthesize(
       characters: 0,
       cached: false,
       refusedReason: decision.reason ?? "Spoken replies are unavailable.",
+      ...(decision.limit ? { refusedLimit: decision.limit } : {}),
     };
   }
 
@@ -154,6 +164,7 @@ export async function synthesize(
           characters: clean.length,
           voiceId: voiceConfig().voiceId,
           passageReference: options.passageReference ?? null,
+          translationId: options.translationId ?? null,
         },
       },
       { upsert: true },

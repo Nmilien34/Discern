@@ -72,8 +72,13 @@ services:
       - key: MONGODB_DB_NAME
         value: discern
       # A REAL AWS region — "auto" is an R2-ism the AWS SDK rejects.
+      #
+      # AND IT MUST MATCH WHERE THE BUCKET ACTUALLY IS. discern-audio lives in
+      # us-east-1. This said us-east-2, and every upload failed with "the bucket
+      # you are attempting to access must be addressed using the specified
+      # endpoint" — which does not read as a region mismatch until you know.
       - key: AWS_REGION
-        value: us-east-2
+        value: us-east-1
       - key: S3_BUCKET
         value: discern-audio
       # ABIGAIL'S PROMPTS ARE NOT IN THIS REPOSITORY and the service will not
@@ -119,7 +124,7 @@ services:
       - key: MONGODB_DB_NAME
         value: discern
       - key: AWS_REGION
-        value: us-east-2
+        value: us-east-1
       - key: S3_BUCKET
         value: discern-audio
       # Lower than the API's: the worker is a background poller, and this cluster

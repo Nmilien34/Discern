@@ -16,7 +16,7 @@
 
 import { connectToDatabase, disconnectFromDatabase } from "../db/connect";
 import { env } from "../config/env";
-import { PassageModel, SpeechCacheModel, StageModel } from "../models";
+import { PassageModel, SpeechCacheModel, StageModel, TranslationModel } from "../models";
 import { speakable } from "../services/speech/sentences";
 import { synthesize } from "../services/speech/tts";
 
@@ -67,11 +67,24 @@ async function main(): Promise<void> {
     }
   }
 
+  // Keyed by reference AND translation. Keyed by reference alone, this
+  // reported WEB as "already cached" when what existed was a KJV recording.
   const already = new Set(
     (await SpeechCacheModel.find({ passageReference: { $ne: null } })
-      .select("passageReference")
-      .lean()).map((r) => r.passageReference),
+      .select("passageReference translationId")
+      .lean()).map((r) => `${r.passageReference}::${r.translationId ?? "unknown"}`),
   );
+
+  const defaultTranslation = await TranslationModel.findOne({ isDefault: true })
+    .select("_id abbreviation")
+    .lean();
+
+  if (!defaultTranslation) {
+    throw new Error("No default translation is set; refusing to guess one.");
+  }
+
+  const defaultTranslationId = String(defaultTranslation._id);
+  console.log(`  translation: ${defaultTranslation.abbreviation} (default)`);
 
   let totalChars = 0;
   let counted = 0;
@@ -81,15 +94,24 @@ async function main(): Promise<void> {
     // on-request-only passages are never handed over unprompted, so they are
     // never read aloud unprompted either.
     if (p.handling === "on-request-only") continue;
-    if (already.has(p.reference)) continue;
+    if (already.has(`${p.reference}::${defaultTranslationId}`)) continue;
 
+    // THE DEFAULT TRANSLATION, RESOLVED — never "whichever came first".
+    //
+    // This took Object.values(texts)[0], and the stored key order puts KJV
+    // before WEB, so the first full-corpus run synthesized 3,879 passages of
+    // KJV: 1.94M credits of audio that no WEB reader will ever be served,
+    // because the cache is keyed on the TEXT and the texts differ.
+    //
+    // "Yahweh is my light" and "The LORD is my light" are the same verse and a
+    // different recording. Insertion order is not a translation choice.
     const texts = p.texts as unknown as Map<string, string> | Record<string, string>;
-    const first =
+    const body =
       texts instanceof Map
-        ? [...texts.values()][0]
-        : Object.values(texts ?? {})[0];
+        ? texts.get(defaultTranslationId)
+        : texts?.[defaultTranslationId];
 
-    const text = speakable(String(first ?? ""));
+    const text = speakable(String(body ?? ""));
     if (!text) continue;
 
     totalChars += text.length;
@@ -129,26 +151,71 @@ async function main(): Promise<void> {
 
   let done = 0;
   let failed = 0;
+  let stopped = false;
+  const failures: { reference: string; reason: string }[] = [];
+  const startedAt = Date.now();
 
-  for (const item of batch) {
-    // "pregen" is not a real user; it has its own ceiling scope so warming the
-    // cache can never consume a person's daily allowance.
-    const result = await synthesize(item.text, "pregen", {
-      passageReference: item.reference,
-    });
+  // CONCURRENCY. Synthesis is ~4s of waiting on ElevenLabs and S3, so a
+  // sequential run over 3,911 passages is about eight hours of mostly idling.
+  // Eight at a time brings it under an hour without pushing the provider.
+  const CONCURRENCY = 8;
+  const queue = [...batch];
 
-    if (!result || result.refusedReason) {
-      failed += 1;
-      console.log(`    FAILED ${item.reference}: ${result?.refusedReason ?? "no result"}`);
-      // A ceiling refusal will refuse everything after it too.
-      if (result?.refusedReason) break;
-    } else {
+  const worker = async (): Promise<void> => {
+    while (!stopped) {
+      const item = queue.shift();
+      if (!item) return;
+
+      const result = await synthesize(item.text, "pregen", {
+        passageReference: item.reference,
+        translationId: defaultTranslationId,
+      });
+
+      if (!result || result.refusedReason) {
+        failed += 1;
+        failures.push({
+          reference: item.reference,
+          reason: result?.refusedReason ?? "no result",
+        });
+        // ONLY A DAILY CEILING STOPS THE RUN. A "per-request" refusal means
+        // this one passage is too long and says nothing about the next — the
+        // first version stopped on it and ended the corpus run at 952 of 3,879.
+        if (
+          result?.refusedLimit === "user-daily" ||
+          result?.refusedLimit === "global-daily"
+        ) {
+          stopped = true;
+          console.log(`    STOPPED at ${item.reference}: ${result.refusedReason}`);
+        }
+        continue;
+      }
+
       done += 1;
-      if (done % 10 === 0) console.log(`    ${done}/${batch.length}`);
+      if (done % 100 === 0) {
+        const rate = done / ((Date.now() - startedAt) / 1000);
+        const left = Math.round((batch.length - done) / rate / 60);
+        console.log(`    ${done}/${batch.length}  ${rate.toFixed(1)}/s  ~${left}m left`);
+      }
+    }
+  };
+
+  await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
+
+  console.log(`\n  done ${done}, failed ${failed}, in ${Math.round((Date.now()-startedAt)/60000)}m`);
+
+  if (failures.length > 0) {
+    console.log("\n  FAILURES:");
+    const byReason = new Map<string, string[]>();
+    for (const f of failures) {
+      const list = byReason.get(f.reason) ?? [];
+      list.push(f.reference);
+      byReason.set(f.reason, list);
+    }
+    for (const [reason, refs] of byReason) {
+      console.log(`    ${refs.length}x  ${reason}`);
+      console.log(`         ${refs.slice(0, 8).join(", ")}${refs.length > 8 ? " ..." : ""}`);
     }
   }
-
-  console.log(`\n  done ${done}, failed ${failed}`);
   await disconnectFromDatabase();
 }
 

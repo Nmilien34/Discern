@@ -24,6 +24,15 @@ export interface SpeechCacheDocument extends Document {
   voiceId: string;
   /** Set for scripture so pregenerated passages are identifiable and kept. */
   passageReference: string | null;
+  /**
+   * WHICH TRANSLATION this recording is of.
+   *
+   * "Yahweh is my light" and "The LORD is my light" are the same verse and
+   * different audio, so a reference alone does not identify a recording. The
+   * first corpus run treated `passageReference` as the identity and reported
+   * WEB as "already cached" when what existed was KJV.
+   */
+  translationId: string | null;
   hits: number;
   lastHitAt: Date | null;
   createdAt: Date;
@@ -37,6 +46,7 @@ const speechCacheSchema = new Schema<SpeechCacheDocument>(
     characters: { type: Number, required: true },
     voiceId: { type: String, required: true },
     passageReference: { type: String, default: null },
+    translationId: { type: String, default: null },
     hits: { type: Number, required: true, default: 0 },
     lastHitAt: { type: Date, default: null },
   },
@@ -45,6 +55,9 @@ const speechCacheSchema = new Schema<SpeechCacheDocument>(
 
 // Answers "what did pregeneration actually cover" without scanning.
 speechCacheSchema.index({ passageReference: 1 });
+
+// The pregeneration lookup: what is already recorded, PER TRANSLATION.
+speechCacheSchema.index({ passageReference: 1, translationId: 1 });
 
 export const SpeechCacheModel: Model<SpeechCacheDocument> =
   model<SpeechCacheDocument>("SpeechCache", speechCacheSchema);
