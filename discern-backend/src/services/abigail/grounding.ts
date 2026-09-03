@@ -23,6 +23,8 @@
 // cannot do those, and pretending otherwise would give false confidence.
 
 import { logger } from "../../lib/logger";
+import { BOOKS } from "@discern/shared";
+
 import { parseReference } from "../../lib/reference";
 
 export interface GroundingInput {
@@ -50,27 +52,55 @@ const REFERENCE_PATTERN =
   /\b((?:[123]\s+)?(?:[A-Z][a-z]+(?:\s+of\s+[A-Z][a-z]+)?(?:\s+[A-Z][a-z]+)?))\s+(\d+):(\d+)(?:\s*[-–]\s*(?:\d+:)?\d+)?/g;
 
 /**
- * The distinct passages a reply actually REFERENCES, as "Book Chapter".
+ * Every name and alias that can start a reference, longest first.
+ *
+ * Built from the canonical table rather than guessed at, because the guess was
+ * wrong: the previous pattern matched "one or two capitalised words before
+ * chapter:verse", which turns "Read Matthew 18:15" into the book "Read Matthew"
+ * and "See Galatians 6:2" into "See Galatians". A reply that named one passage
+ * twice was counted as three, and any sentence opening with a capitalised verb
+ * inflated the count.
+ *
+ * Longest-first matters: "Song of Solomon" must be tried before "Song", and
+ * "1 Corinthians" before "Corinthians".
+ */
+const BOOK_PATTERN = [...BOOKS]
+  .flatMap((book) => [book.name, ...book.aliases])
+  .sort((a, b) => b.length - a.length)
+  .map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+  .join("|");
+
+const REFERENCED_PATTERN = new RegExp(
+  `\\b(${BOOK_PATTERN})\\.?\\s+(\\d+):(\\d+)`,
+  "gi",
+);
+
+/**
+ * The distinct passages a reply actually REFERENCES, as "book chapter".
  *
  * `TurnResult.citations` is not this. That field accumulates every passage the
  * TOOLS returned — a single `search_scripture` call contributes five — so it
- * measures how widely she searched, not what she wrote. Counting it as output
- * overstates a one-passage reply by a factor of five.
+ * measures how widely she searched, not what she wrote.
  *
  * Verses collapse to their chapter, because "Psalm 46:1" and "Psalm 46:10" are
- * one passage quoted twice, not two passages. Book names are lowercased and
- * lose a trailing "s" so "Psalm" and "Psalms" agree; that also turns "Romans"
- * into "roman", which is harmless because it does so consistently.
+ * one passage quoted twice, not two passages. Aliases collapse to the canonical
+ * slug, so "Matt 18:15" and "Matthew 18:21" are also one.
  */
 export function referencedPassages(reply: string): string[] {
   const seen = new Set<string>();
 
-  for (const match of reply.matchAll(REFERENCE_PATTERN)) {
-    const book = match[1]?.trim();
+  for (const match of reply.matchAll(REFERENCED_PATTERN)) {
+    const rawBook = match[1]?.toLowerCase().replace(/\.$/, "").trim();
     const chapter = match[2];
-    if (book && chapter) {
-      seen.add(`${book.toLowerCase().replace(/s$/, "")} ${chapter}`);
-    }
+    if (!rawBook || !chapter) continue;
+
+    const book = BOOKS.find(
+      (b) =>
+        b.name.toLowerCase() === rawBook ||
+        b.aliases.some((a) => a.toLowerCase() === rawBook),
+    );
+
+    seen.add(`${book ? book.slug : rawBook} ${chapter}`);
   }
 
   return [...seen];

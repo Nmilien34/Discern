@@ -178,7 +178,22 @@ function promisesAnOutcome(reply: string): string | null {
   // regression). One substitution kills the whole class rather than adding a
   // third special case to the pattern.
   const text = reply.replace(/[\u2018\u2019\u02bc]/g, "'").replace(/[\u201c\u201d]/g, '"');
-  const clauses = text.split(/(?<=[.?!])\s+|\n+|,\s+(?=but\b|yet\b)/i);
+
+  // USE VERSUS MENTION.
+  //
+  // Naming the phrase is not saying it. Her replies quote it in order to refuse
+  // it — 'Saying "it\'s going to be okay" can help for a moment, but it doesn\'t
+  // make reality safer' is a rejection, and the judge reads it as one. Quoted
+  // spans are blanked before matching so the blacklist stops accusing her of
+  // the thing she is declining to do.
+  //
+  // The known Phase 6.5 failure was UNQUOTED ("It will be okay."), so this does
+  // not weaken the regression it exists to catch. A quoted phrase that is then
+  // endorsed would slip past — that is the judge's job, and the judge has the
+  // amended criterion for exactly this scenario.
+  const withoutQuotes = text.replace(/"[^"]*"/g, (m) => " ".repeat(m.length));
+
+  const clauses = withoutQuotes.split(/(?<=[.?!])\s+|\n+|,\s+(?=but\b|yet\b)/i);
 
   for (const clause of clauses) {
     const hit = PROMISED_OUTCOMES.exec(clause);

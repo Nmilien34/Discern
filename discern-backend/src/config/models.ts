@@ -107,8 +107,16 @@ export interface EffortTiers {
 }
 
 export const effort: EffortTiers = {
-  // Pure classification against a fixed enum. There is nothing to reason about.
-  safety: (env.SAFETY_EFFORT as ReasoningEffort) ?? "minimal",
+  // MEASURED, not assumed. `minimal` looked right — it is a classification
+  // against a fixed enum — and it reintroduced the Phase 6 false positive:
+  // "I said something cruel to my wife" came back as abuse_disclosure 1 time in
+  // 10, which hands a domestic-violence hotline to someone who was unkind and
+  // is trying to repair it. At `low` that is 0 in 10.
+  //
+  // It costs nothing to be generous here. This tier is gpt-5-nano, runs
+  // sub-second, and is invisible in a 31-second turn. The one distinction it
+  // has to make is the hardest one in the app.
+  safety: (env.SAFETY_EFFORT as ReasoningEffort) ?? "low",
   // A judgement, but a narrow one, and its prompt does the heavy lifting.
   premise: (env.PREMISE_EFFORT as ReasoningEffort) ?? "low",
   // The tier that writes most replies.
