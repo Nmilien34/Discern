@@ -34,7 +34,12 @@ import {
 } from "./grounding";
 import { runPremisePass } from "./premise";
 import { ABIGAIL_SYSTEM_PROMPT, buildContextMessage } from "./prompt";
-import { activeCarryingsFor, executeTool, TOOL_DEFINITIONS } from "./tools";
+import {
+  activeCarryingsFor,
+  executeTool,
+  searchScriptureTool,
+  TOOL_DEFINITIONS,
+} from "./tools";
 
 // Raised from 5 after watching the eval: her working pattern is search, read
 // several candidates, choose, then offer — which spends five rounds before she
@@ -220,20 +225,10 @@ async function runTurnInner(
     why: p.why,
   }));
 
-  const contextMessage = buildContextMessage({
-    premise,
-    currentStage: openStage
-      ? { slug: openStage.stageSlug, from: openStage.stageSlug, to: "" }
-      : null,
-    carryings,
-    facts: (memory?.facts ?? []).map((f) => f.text),
-    people: memory?.peopleMentioned ?? [],
-    passagesGiven,
-    openThreads: (memory?.openThreads ?? []).map((t) => t.text),
-  });
-
   // ---- 4. REASONING TURN ---------------------------------------------------
   const chosenModel = chooseModel(premise.verdict, priorMessages.length === 0);
+
+  const retrievedFromPreSearch: string[] = [];
 
   const toolContext = {
     userId,
@@ -245,6 +240,52 @@ async function runTurnInner(
       costs.push(usage);
     },
   };
+
+  // ---- 4a. PRE-SEARCH ------------------------------------------------------
+  //
+  // She used to spend a round deciding to search and another reading what came
+  // back, before writing anything. The premise pass has ALREADY run by this
+  // point and already names the subject — `realQuestion` is what they are
+  // actually asking, which is exactly the thing worth searching for.
+  //
+  // So one search runs here, unprompted, and the results are in her opening
+  // context. The tool stays available: this is a starting point, not a
+  // constraint, and if the seeded passages are wrong she searches again.
+  //
+  // Seeded from realQuestion, falling back to the raw message when the premise
+  // pass was unavailable — never from `correction`, which is what SHE would
+  // say rather than what THEY are dealing with, and retrieves her own words.
+  const preSearchQuery = premise.realQuestion?.trim() || userMessage;
+
+  let preSearched: string | null = null;
+
+  try {
+    const seeded = await searchScriptureTool({ query: preSearchQuery }, toolContext);
+    if (seeded.citations.length > 0) {
+      preSearched = seeded.resultSummary;
+      retrievedFromPreSearch.push(...seeded.citations.map((c) => c.ref));
+    }
+  } catch (error) {
+    // A failed pre-search is a lost optimisation, not a lost turn. She still
+    // has the tool.
+    logger.warn(
+      { err: error instanceof Error ? error.message : error },
+      "pre-search failed; falling through to the tool loop",
+    );
+  }
+
+  const contextMessage = buildContextMessage({
+    premise,
+    currentStage: openStage
+      ? { slug: openStage.stageSlug, from: openStage.stageSlug, to: "" }
+      : null,
+    carryings,
+    facts: (memory?.facts ?? []).map((f) => f.text),
+    people: memory?.peopleMentioned ?? [],
+    passagesGiven,
+    openThreads: (memory?.openThreads ?? []).map((t) => t.text),
+    preSearched,
+  });
 
   const runReasoning = async (
     extraInstruction?: string,
@@ -441,8 +482,15 @@ async function runTurnInner(
 
     verdict = checkGrounding({
       reply: attempt.reply,
-      retrievedReferences: attempt.retrievedReferences,
-      toolCallCount: attempt.toolCalls.length,
+      // Pre-searched passages count on BOTH axes. She was handed them by a
+      // real tool call, so citing one is grounded, and a turn that needed no
+      // further search is the pre-search working rather than a reply with
+      // nothing behind it.
+      retrievedReferences: [
+        ...attempt.retrievedReferences,
+        ...retrievedFromPreSearch,
+      ],
+      toolCallCount: attempt.toolCalls.length + retrievedFromPreSearch.length,
     });
 
     if (!verdict.grounded || !attempt.reply.trim()) {

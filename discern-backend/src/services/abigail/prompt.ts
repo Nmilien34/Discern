@@ -24,6 +24,15 @@ export interface PromptContext {
   people: { name: string; relationship: string; context: string }[];
   passagesGiven: { ref: string; why: string }[];
   openThreads: string[];
+  /**
+   * Passages already retrieved for this turn, before she was asked anything.
+   *
+   * Seeded from the premise pass's `realQuestion`, formatted exactly as a
+   * search_scripture result — full text, cautions, author circumstances, the
+   * same harm gates. She used to spend one round deciding to search and another
+   * reading what came back; this puts a starting point in front of her instead.
+   */
+  preSearched: string | null;
 }
 
 /**
@@ -98,6 +107,18 @@ export function buildContextMessage(context: PromptContext): string {
         context.people
           .map((p) => `${p.name} (${p.relationship}) — ${p.context}`)
           .join("\n"),
+    );
+  }
+
+  if (context.preSearched) {
+    parts.push(
+      "\n=== PASSAGES ALREADY RETRIEVED FOR YOU ===\n" +
+        "These came from a search on what they are actually asking, run before\n" +
+        "you were called. They are a STARTING POINT, not a shortlist you must\n" +
+        "choose from — if none of them fits, search again with better words.\n" +
+        "You may quote and cite these directly; they were retrieved with a tool\n" +
+        "exactly as if you had called it yourself.\n\n" +
+        context.preSearched,
     );
   }
 

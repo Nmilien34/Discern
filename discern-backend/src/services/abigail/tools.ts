@@ -245,7 +245,15 @@ export async function executeTool(
   }
 }
 
-async function searchScriptureTool(
+/**
+ * Exported so the pipeline can run ONE search before the reasoning turn.
+ *
+ * Same code path as the tool, deliberately: the pre-search must produce results
+ * formatted exactly as a tool call would, or she would be reading two different
+ * things in the same conversation — one with cautions and author circumstances
+ * attached, one without. Same harm gates too. The only difference is who asked.
+ */
+export async function searchScriptureTool(
   args: RawArgs,
   context: ToolContext,
 ): Promise<ToolInvocation> {
