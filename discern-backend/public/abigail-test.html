@@ -112,6 +112,18 @@
     content: ""; animation: pulse 1.1s ease-in-out infinite;
   }
   @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+  .voicebar {
+    max-width: 640px; margin: 0 auto 8px; display: flex; gap: 10px;
+    align-items: center; font: 13px/1 ui-sans-serif, system-ui, sans-serif;
+    color: var(--muted);
+  }
+  .voicebar label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+  .mic {
+    border: 1px solid var(--accent); background: none; color: var(--accent);
+    border-radius: 999px; padding: 7px 13px; cursor: pointer;
+    font: 13px/1 ui-sans-serif, system-ui, sans-serif;
+  }
+  .mic.rec { background: #b4472f; border-color: #b4472f; color: #fff; }
   .dots::after {
     content: "\00b7"; animation: d 1.2s infinite steps(4, end); letter-spacing: 3px;
   }
@@ -128,6 +140,11 @@
 <header><b>Abigail</b><span id="status">connecting</span></header>
 <div id="log"></div>
 <footer>
+  <div class="voicebar">
+    <label><input type="checkbox" id="voice"> Hear her answer</label>
+    <button type="button" class="mic" id="mic">Speak instead</button>
+    <span id="voicenote"></span>
+  </div>
   <div id="carrying"><h2></h2><ul></ul></div>
   <form id="composer">
     <textarea id="input" rows="1" placeholder="Say what's actually going on." autocomplete="off"></textarea>
@@ -362,9 +379,42 @@
     }
   }
 
+  // ── Audio.
+  //
+  // Sentences arrive as they are synthesized, out of order and while she is
+  // still writing, so they are queued and played strictly by index. Playing on
+  // arrival would read the reply in whatever order the synthesis finished.
+  var audioQueue = [];
+  var audioNext = 0;
+  var playing = false;
+
+  function drain() {
+    if (playing) return;
+    var item = audioQueue.find(function (a) { return a.index === audioNext; });
+    if (!item) return;
+    playing = true;
+    var el = new Audio(item.url);
+    el.onended = el.onerror = function () {
+      playing = false;
+      audioNext += 1;
+      drain();
+    };
+    el.play().catch(function () {
+      // Autoplay blocked until the page has been interacted with. The send
+      // button is an interaction, so this only bites on a first load.
+      playing = false; audioNext += 1; drain();
+    });
+  }
+
+  function enqueueAudio(event) {
+    audioQueue.push({ index: event.index, url: event.url });
+    drain();
+  }
+
   function say(text) {
     bubble("me", text);
     setBusy(true);
+    audioQueue = []; audioNext = 0; playing = false;
 
     var trail = el("div", "activity");
     log.appendChild(trail);
@@ -401,7 +451,10 @@
         "Content-Type": "application/json",
         Authorization: "Bearer " + token
       },
-      body: JSON.stringify({ content: text })
+      body: JSON.stringify({
+        content: text,
+        voice: document.getElementById("voice").checked
+      })
     }).then(function (res) {
       if (!res.ok || !res.body) throw new Error("HTTP " + res.status);
 
@@ -430,6 +483,11 @@
             try { data = JSON.parse(payload); } catch (e) { return; }
 
             if (name === "progress") {
+              if (data.type === "audio") { enqueueAudio(data); return; }
+              if (data.type === "audio-unavailable") {
+                document.getElementById("voicenote").textContent = data.reason;
+                return;
+              }
               // A restart means what has been shown is being thrown away.
               if (data.type === "restart" && bubbleEl) {
                 turn.remove(); turn = null; bubbleEl = null;
@@ -488,6 +546,59 @@
         note("Couldn't reach Abigail: " + e.message, true);
       }
     });
+
+  // ── Voice input.
+  //
+  // The transcript goes into the compose box, NOT straight into a turn. A
+  // misheard sentence would otherwise become something the person never said,
+  // and this is an app where the exact words matter.
+  var recorder = null;
+  var chunks = [];
+  var mic = document.getElementById("mic");
+
+  mic.onclick = function () {
+    if (recorder && recorder.state === "recording") {
+      recorder.stop();
+      return;
+    }
+
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+      chunks = [];
+      recorder = new MediaRecorder(stream);
+      recorder.ondataavailable = function (e) { if (e.data.size) chunks.push(e.data); };
+      recorder.onstop = function () {
+        stream.getTracks().forEach(function (t) { t.stop(); });
+        mic.className = "mic";
+        mic.textContent = "Transcribing…";
+
+        fetch(API + "/v1/abigail/transcribe", {
+          method: "POST",
+          headers: {
+            "Content-Type": "audio/webm",
+            Authorization: "Bearer " + token
+          },
+          body: new Blob(chunks, { type: "audio/webm" })
+        }).then(function (r) { return r.json(); }).then(function (j) {
+          mic.textContent = "Speak instead";
+          var d = j.data || {};
+          if (d.refusedReason) {
+            document.getElementById("voicenote").textContent = d.refusedReason;
+            return;
+          }
+          input.value = (input.value ? input.value + " " : "") + (d.text || "");
+          input.focus();
+        }).catch(function () {
+          mic.textContent = "Speak instead";
+          document.getElementById("voicenote").textContent = "Couldn't transcribe that.";
+        });
+      };
+      recorder.start();
+      mic.className = "mic rec";
+      mic.textContent = "Stop";
+    }).catch(function () {
+      document.getElementById("voicenote").textContent = "Microphone not available.";
+    });
+  };
 
   // ── Composer.
   input.addEventListener("input", function () {

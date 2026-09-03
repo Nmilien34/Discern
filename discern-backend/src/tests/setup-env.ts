@@ -27,6 +27,9 @@ process.env.MONGODB_DB_NAME = "discern-test";
 
 process.env.OPENAI_API_KEY = "test-openai-key-not-a-real-credential";
 process.env.ELEVENLABS_API_KEY = "test-elevenlabs-key-not-a-real-credential";
+// Required from Phase 7. A real-looking id so validation is exercised; no
+// request is ever made with it because the key above is a sentinel.
+process.env.ELEVENLABS_VOICE_ID = "hv8WzBOrsvuSUeIQGOCM";
 
 process.env.AWS_ACCESS_KEY_ID = "test-aws-access-key-id";
 process.env.AWS_SECRET_ACCESS_KEY = "test-aws-secret-access-key";

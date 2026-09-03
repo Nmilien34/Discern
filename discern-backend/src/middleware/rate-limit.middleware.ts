@@ -163,6 +163,20 @@ export const deviceAuthLimiter: RequestHandler = rateLimit({
   by: "ip",
 });
 
+/**
+ * Voice input. Costed per minute, and a 10 MB upload per call.
+ *
+ * Lower than the turn limiter because a transcription is cheaper than a turn
+ * but the upload is not free, and a loop here spends both bandwidth and
+ * ElevenLabs minutes.
+ */
+export const transcribeLimiter: RequestHandler = rateLimit({
+  name: "transcribe",
+  windowMs: 60 * 60 * 1000,
+  max: 60,
+  by: "user",
+});
+
 /** Ungated and does real verification work on every call. */
 export const linkAuthLimiter: RequestHandler = rateLimit({
   name: "auth-link",

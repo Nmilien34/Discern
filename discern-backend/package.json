@@ -30,9 +30,13 @@
     "eval:critical": "tsx src/scripts/eval-critical.ts",
     "testers": "tsx src/scripts/make-testers.ts",
     "transcripts": "tsx src/scripts/read-transcripts.ts",
-    "latency": "tsx src/scripts/latency-breakdown.ts"
+    "latency": "tsx src/scripts/latency-breakdown.ts",
+    "speech:pregen": "tsx src/scripts/pregenerate-scripture.ts",
+    "speech:report": "tsx src/scripts/speech-report.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1125.0",
+    "@aws-sdk/s3-request-presigner": "^3.1125.0",
     "@discern/shared": "0.1.0",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.1",

@@ -225,8 +225,54 @@ const envSchema = z.object({
   OPENAI_API_KEY: z.string().min(1, "OPENAI_API_KEY is required"),
 
   /** Required from PHASE 7 (voice). Optional before that. */
-  ELEVENLABS_API_KEY: z.string().min(1).optional(),
-  ELEVENLABS_VOICE_ID: z.string().min(1).optional(),
+  // REQUIRED FROM PHASE 7. The Phase 2 amendment made provider keys
+  // optional-but-validated until the phase that uses them; this is that phase.
+  // A service that boots without them would accept a voice conversation and
+  // fail at the moment someone speaks.
+  ELEVENLABS_API_KEY: z.string().min(1),
+  ELEVENLABS_VOICE_ID: z.string().min(1),
+  /** Model for synthesis. Config, not a constant — quality/latency tiers move. */
+  ELEVENLABS_TTS_MODEL: z.string().min(1).default("eleven_turbo_v2_5"),
+  /** Model for transcription. */
+  ELEVENLABS_STT_MODEL: z.string().min(1).default("scribe_v1"),
+
+  // ---- Voice settings ------------------------------------------------------
+  //
+  // In config because `style` in particular is the dial that decides whether
+  // she sounds dry and sardonic or like a meditation app, and that is a taste
+  // judgement to be made by listening, not by deploying.
+  ELEVENLABS_STABILITY: z.coerce.number().min(0).max(1).default(0.45),
+  ELEVENLABS_SIMILARITY_BOOST: z.coerce.number().min(0).max(1).default(0.75),
+  ELEVENLABS_STYLE: z.coerce.number().min(0).max(1).default(0.35),
+  ELEVENLABS_SPEAKER_BOOST: z.enum(["true", "false"]).default("true")
+    .transform((v) => v === "true"),
+
+  // ---- THE SPEND CEILING ---------------------------------------------------
+  //
+  // Built before the feature, deliberately. ElevenLabs is the only cost that
+  // scales with one user's enthusiasm, and the failure it guards against is not
+  // a busy subscriber — it is a retry loop against a per-character API.
+  //
+  // DEFAULTS TIGHTENED AFTER MEASURING. The first pass allowed 60,000
+  // characters per user per day, which at the configured rate is $18.00 — the
+  // entire annual revenue from that subscriber in 1.6 days.
+  //
+  // Measured: a reply is ~1,431 speakable characters, so a spoken reply costs
+  // about $0.43 against $0.018 for the same turn in text. 12,000 characters is
+  // roughly eight spoken replies a day, which is more than a real person has
+  // and still $3.60 — so this is a RUNAWAY GUARD, not an economic fix. The
+  // economics need a cheaper rate or a smaller unit of speech; see the Phase 7
+  // report. A ceiling cannot make a 24x cost multiplier work.
+  TTS_DAILY_CHARS_PER_USER: z.coerce.number().int().positive().default(12_000),
+  TTS_DAILY_CHARS_GLOBAL: z.coerce.number().int().positive().default(300_000),
+  STT_DAILY_SECONDS_PER_USER: z.coerce.number().int().positive().default(1_800),
+  STT_DAILY_SECONDS_GLOBAL: z.coerce.number().int().positive().default(72_000),
+  /** Longest single synthesis. A runaway reply must not be one huge bill. */
+  TTS_MAX_CHARS_PER_REQUEST: z.coerce.number().int().positive().default(5_000),
+
+  // Published rates, for reporting only. Nothing bills off these.
+  TTS_USD_PER_1K_CHARS: z.coerce.number().nonnegative().default(0.30),
+  STT_USD_PER_MINUTE: z.coerce.number().nonnegative().default(0.006),
 
   // Model IDs are CONFIG, not constants (CONVENTIONS.md §2). Declared optional
   // here because config/models.ts owns the DEFAULTS and the documentation of
@@ -271,8 +317,9 @@ const envSchema = z.object({
       }),
     )
     .optional(),
-  AWS_ACCESS_KEY_ID: z.string().min(1).optional(),
-  AWS_SECRET_ACCESS_KEY: z.string().min(1).optional(),
+  // REQUIRED FROM PHASE 7: synthesized audio lives in S3, never in Mongo.
+  AWS_ACCESS_KEY_ID: z.string().min(1),
+  AWS_SECRET_ACCESS_KEY: z.string().min(1),
   // S3 bucket naming rules, checked here rather than at first upload: 3-63
   // characters, lowercase letters/digits/hyphens/dots, must start and end
   // alphanumeric. An invalid name fails every request with an opaque SDK error.
@@ -289,8 +336,7 @@ const envSchema = z.object({
           "lowercase letters, digits, hyphens and dots, starting and ending " +
           "alphanumeric).",
       }),
-    )
-    .optional(),
+    ),
 
   // ---- RevenueCat: REQUIRED FROM PHASE 4 -----------------------------------
   // Shared secret, timing-safe compared at the webhook. NOT byte-validated: the

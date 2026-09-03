@@ -1,15 +1,19 @@
-import { Router } from "express";
+import express, { Router } from "express";
 import { z } from "zod";
 
 import { asyncHandler } from "../lib/async-handler";
 import { logger } from "../lib/logger";
-import { NotFoundError } from "../lib/errors";
+import { NotFoundError, ValidationError } from "../lib/errors";
 import { sendData } from "../lib/responses";
 import { loadUser, requireAuth } from "../middleware/auth.middleware";
-import { abigailTurnLimiters } from "../middleware/rate-limit.middleware";
+import {
+  abigailTurnLimiters,
+  transcribeLimiter,
+} from "../middleware/rate-limit.middleware";
 import { validateBody } from "../middleware/validate.middleware";
 import { ConversationModel, MessageModel, UserModel } from "../models";
 import { persistTurn, runTurn } from "../services/abigail/pipeline";
+import { transcribe } from "../services/speech/stt";
 
 export const abigailRouter: Router = Router();
 
@@ -18,7 +22,18 @@ const startConversationSchema = z
   .strict();
 
 const sendMessageSchema = z
-  .object({ content: z.string().min(1).max(8000) })
+  .object({
+    content: z.string().min(1).max(8000),
+    /**
+     * Ask for the reply to be spoken as well as written.
+     *
+     * THE UPGRADE, NEVER THE DEFAULT (ARCHITECTURE.md §10 decision 1). Every
+     * route in this router already sits behind requireEntitlement, so asking
+     * for voice without a subscription never reaches here — and if synthesis is
+     * refused for any reason the turn still returns her reply in text.
+     */
+    voice: z.boolean().default(false),
+  })
   .strict();
 
 /**
@@ -126,7 +141,7 @@ abigailRouter.post(
 
     if (!conversation) throw new NotFoundError("No such conversation.");
 
-    const { content } = req.body as { content: string };
+    const { content, voice } = req.body as { content: string; voice: boolean };
 
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-store");
@@ -149,6 +164,7 @@ abigailRouter.post(
 
     try {
       const result = await runTurn(userId, conversation._id, content, {
+        voice,
         onProgress: (event) => {
           if (!aborted) send("progress", event);
         },
@@ -165,6 +181,9 @@ abigailRouter.post(
         citations: result.citations.map((c) => c.ref),
         modelUsed: result.modelUsed,
         latencyMs: result.latencyMs,
+        // What this turn's audio cost, so spend is visible per conversation
+        // rather than only in aggregate.
+        speech: result.speech,
       });
     } catch (error) {
       // The stream has already been committed with a 200, so a failure cannot
@@ -179,6 +198,46 @@ abigailRouter.post(
     } finally {
       res.end();
     }
+  }),
+);
+
+/**
+ * POST /v1/abigail/transcribe
+ *
+ * Voice INPUT. Costed and reported separately from synthesis, because speaking
+ * the problem out loud and hearing the answer read back are different products
+ * with different economics and should be able to ship independently.
+ *
+ * Returns text only. What the person does with the transcript — send it, edit
+ * it first — is theirs, and transcribing straight into a turn would mean a
+ * misheard sentence becomes something they never said.
+ */
+abigailRouter.post(
+  "/transcribe",
+  requireAuth,
+  loadUser,
+  transcribeLimiter,
+  // Audio, not JSON. 10 MB is several minutes of speech at the bitrates a
+  // browser produces, and past that it is not somebody talking.
+  express.raw({ type: ["audio/*", "application/octet-stream"], limit: "10mb" }),
+  asyncHandler(async (req, res) => {
+    const body = req.body as Buffer;
+
+    if (!Buffer.isBuffer(body) || body.byteLength === 0) {
+      throw new ValidationError("Send the recording as an audio body.");
+    }
+
+    const result = await transcribe(
+      new Uint8Array(body),
+      String(req.currentUser!._id),
+      "input.webm",
+    );
+
+    sendData(res, {
+      text: result.text,
+      seconds: result.seconds,
+      ...(result.refusedReason ? { refusedReason: result.refusedReason } : {}),
+    });
   }),
 );
 

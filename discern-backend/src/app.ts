@@ -94,7 +94,10 @@ export function createApp(): Express {
       res.setHeader(
         "Content-Security-Policy",
         "default-src 'self'; style-src 'self' 'unsafe-inline'; " +
-          "script-src 'self' 'unsafe-inline'; connect-src 'self'",
+          "script-src 'self' 'unsafe-inline'; connect-src 'self'; " +
+          // Synthesized audio is served from presigned S3 URLs, and the mic
+          // produces blob: recordings before upload.
+          "media-src 'self' https://*.amazonaws.com blob:",
       );
       // No crawler should index a page that takes people's disclosures.
       res.setHeader("X-Robots-Tag", "noindex, nofollow");
