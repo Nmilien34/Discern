@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 
 import { asyncHandler } from "../lib/async-handler";
+import { logger } from "../lib/logger";
 import { NotFoundError } from "../lib/errors";
 import { sendData } from "../lib/responses";
 import { loadUser, requireAuth } from "../middleware/auth.middleware";
@@ -93,6 +94,91 @@ abigailRouter.post(
       modelUsed: result.modelUsed,
       latencyMs: result.latencyMs,
     });
+  }),
+);
+
+/**
+ * POST /v1/abigail/conversations/:id/messages/stream
+ *
+ * The same turn, as Server-Sent Events. FOR THE THROWAWAY TEST CLIENT — delete
+ * it with the rest of that surface, or promote it deliberately.
+ *
+ * A turn is 35-75 seconds and rounds 1-3 produce no text at all, so the JSON
+ * endpoint above shows a person a blank screen for most of a minute. This one
+ * emits what she is actually doing — searching, what she found, what she is
+ * reading, what she chose — and then streams the reply as she writes it.
+ *
+ * Events: `progress` (a TurnProgress), `token` ({text}), `done` (the result),
+ * `error`. Persistence and every gate are identical; only the transport differs.
+ */
+abigailRouter.post(
+  "/conversations/:id/messages/stream",
+  requireAuth,
+  loadUser,
+  ...abigailTurnLimiters,
+  validateBody(sendMessageSchema),
+  asyncHandler(async (req, res) => {
+    const userId = req.currentUser!._id;
+    const conversation = await ConversationModel.findOne({
+      _id: String(req.params.id),
+      userId,
+    });
+
+    if (!conversation) throw new NotFoundError("No such conversation.");
+
+    const { content } = req.body as { content: string };
+
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Connection", "keep-alive");
+    // Render buffers proxied responses without this, which would defeat the
+    // entire point by delivering every event at once at the end.
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
+
+    const send = (event: string, data: unknown): void => {
+      if (res.writableEnded) return;
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+
+    // A client that closes mid-turn must not keep the pipeline writing.
+    let aborted = false;
+    req.on("close", () => {
+      aborted = true;
+    });
+
+    try {
+      const result = await runTurn(userId, conversation._id, content, {
+        onProgress: (event) => {
+          if (!aborted) send("progress", event);
+        },
+        onToken: (text) => {
+          if (!aborted) send("token", { text });
+        },
+      });
+
+      await persistTurn(userId, conversation._id, content, result);
+
+      send("done", {
+        reply: result.reply,
+        safetyIntercepted: result.safetyIntercepted,
+        citations: result.citations.map((c) => c.ref),
+        modelUsed: result.modelUsed,
+        latencyMs: result.latencyMs,
+      });
+    } catch (error) {
+      // The stream has already been committed with a 200, so a failure cannot
+      // become a status code — it has to arrive as an event.
+      send("error", {
+        message: "Abigail could not answer just now. Please send that again.",
+      });
+      logger.error(
+        { err: error instanceof Error ? error.message : error },
+        "streamed turn failed",
+      );
+    } finally {
+      res.end();
+    }
   }),
 );
 

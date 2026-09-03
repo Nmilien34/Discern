@@ -101,6 +101,17 @@
     font: 600 15px/1 ui-sans-serif, system-ui, sans-serif; cursor: pointer;
   }
   button[type=submit]:disabled { opacity: .4; cursor: default; }
+  .activity {
+    max-width: 640px; margin: 0 auto 18px; padding-left: 2px;
+    font: 13px/1.7 ui-sans-serif, system-ui, sans-serif; color: var(--muted);
+  }
+  .activity div { display: flex; gap: 8px; align-items: baseline; }
+  .activity .mark { color: var(--accent); flex: 0 0 auto; }
+  .activity .now { color: var(--ink); }
+  .activity .now .mark::after {
+    content: ""; animation: pulse 1.1s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
   .dots::after {
     content: "\00b7"; animation: d 1.2s infinite steps(4, end); letter-spacing: 3px;
   }
@@ -316,27 +327,138 @@
     input.disabled = state;
   }
 
+  // ── A turn, streamed.
+  //
+  // The JSON endpoint returns after 35-75 seconds with nothing before it. This
+  // reads the SSE stream instead, so two things happen that change the wait
+  // entirely: her actual work is visible from about two seconds in, and the
+  // reply appears as she writes it rather than all at once at the end.
+  //
+  // Every line below reflects something that really happened on the server. No
+  // spinner, no invented progress — when it says "reading Isaiah 41" she is.
+  function label(event) {
+    switch (event.type) {
+      case "premise":
+        return "Working out what you are actually asking";
+      case "searching":
+        return "Searching scripture";
+      case "found":
+        // The passages themselves. This is the moment worth watching: she is
+        // reading real scripture and here is which.
+        return "Found " + event.references.slice(0, 3).join(", ") +
+          (event.references.length > 3 ? " and " + (event.references.length - 3) + " more" : "");
+      case "reading":
+        return "Reading " + event.reference;
+      case "author":
+        return "Looking up who wrote it";
+      case "choosing":
+        return "Choosing " + event.reference + " for you";
+      case "writing":
+        return "Writing";
+      case "restart":
+        return "Starting again — " + event.reason;
+      default:
+        return null;
+    }
+  }
+
   function say(text) {
     bubble("me", text);
     setBusy(true);
-    var waiting = note("");
-    waiting.className = "note dots";
 
-    api("/v1/abigail/conversations/" + conversationId + "/messages", {
+    var trail = el("div", "activity");
+    log.appendChild(trail);
+    var current = null;
+
+    function step(event) {
+      var line = label(event);
+      if (!line) return;
+      if (current) current.className = "";
+      current = el("div", "now");
+      var mark = el("span", "mark", "•");
+      current.appendChild(mark);
+      current.appendChild(el("span", null, line));
+      trail.appendChild(current);
+      scroll();
+    }
+
+    var turn = null;
+    var bubbleEl = null;
+
+    function appendToken(t) {
+      if (!turn) {
+        if (current) current.className = "";
+        turn = bubble("her", "");
+        bubbleEl = turn.querySelector(".bubble");
+      }
+      bubbleEl.textContent += t;
+      scroll();
+    }
+
+    fetch(API + "/v1/abigail/conversations/" + conversationId + "/messages/stream", {
       method: "POST",
-      body: { content: text }
-    }).then(function (data) {
-      waiting.remove();
-      var turn = bubble("her", data.reply);
-      // Read back what she actually gave them BEFORE deciding which of the
-      // remaining citations still need a button of their own.
-      refreshCarrying().then(function () {
-        citations(turn, data.citations, data.reply);
-      });
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer " + token
+      },
+      body: JSON.stringify({ content: text })
+    }).then(function (res) {
+      if (!res.ok || !res.body) throw new Error("HTTP " + res.status);
+
+      var reader = res.body.getReader();
+      var decoder = new TextDecoder();
+      var buffer = "";
+
+      function pump() {
+        return reader.read().then(function (chunk) {
+          if (chunk.done) return;
+          buffer += decoder.decode(chunk.value, { stream: true });
+
+          // SSE frames are separated by a blank line.
+          var frames = buffer.split("\n\n");
+          buffer = frames.pop();
+
+          frames.forEach(function (frame) {
+            var name = null, payload = "";
+            frame.split("\n").forEach(function (line) {
+              if (line.indexOf("event: ") === 0) name = line.slice(7);
+              else if (line.indexOf("data: ") === 0) payload += line.slice(6);
+            });
+            if (!name || !payload) return;
+
+            var data;
+            try { data = JSON.parse(payload); } catch (e) { return; }
+
+            if (name === "progress") {
+              // A restart means what has been shown is being thrown away.
+              if (data.type === "restart" && bubbleEl) {
+                turn.remove(); turn = null; bubbleEl = null;
+              }
+              step(data);
+            } else if (name === "token") {
+              appendToken(data.text);
+            } else if (name === "done") {
+              trail.remove();
+              if (!turn) turn = bubble("her", data.reply);
+              refreshCarrying().then(function () {
+                citations(turn, data.citations, data.reply);
+              });
+            } else if (name === "error") {
+              trail.remove();
+              note(data.message + " Try sending it again.", true);
+            }
+          });
+
+          return pump();
+        });
+      }
+
+      return pump();
+    }).then(function () {
       setBusy(false);
       input.focus();
     }).catch(function (e) {
-      waiting.remove();
+      trail.remove();
       note("She didn't answer: " + e.message + ". Try sending it again.", true);
       setBusy(false);
     });

@@ -439,3 +439,31 @@ worktrees — plus `marketing/` and `design/` per `ARCHITECTURE.md` §3.
 Both ignored directories keep an on-disk `README.md` that is **not** committed. Do not add a
 `!marketing/README.md` negation to force it into the index; Corner explicitly warns against
 this and the same reasoning applies to `design/`.
+
+## Retrieval changes require `npm run compare` before they land
+
+`eval:critical` measures how Abigail ANSWERS. It cannot see retrieval getting
+worse, because worse retrieval reads as a perfectly good reply about a less apt
+passage — the gate goes green while the person gets second-best scripture.
+
+This is not hypothetical. On 2026-09-03 the HyDE rewrite was moved to `minimal`
+reasoning effort as part of a latency pass. Every critical scenario stayed at
+100%. The retrieval gate showed Ephesians 2:8-10 had fallen from rank 2 to rank
+3 on the shipped configuration, and gpt-5-nano dropped it out of the top 3
+entirely.
+
+**Any change upstream of the embedding requires `npm run compare` in the same
+change, with the result recorded:**
+
+- the HyDE model or its reasoning effort
+- the embedding model
+- segmentation
+- enrichment, or whether the enriched vector is in the path
+- the retrieval options that shape what gets embedded
+
+The bar is the Phase 3 gate: **query 1 must return Ephesians 2:8-10 in the top
+3.** A rank drop that still passes is still a regression and belongs in the
+commit message.
+
+`eval:critical` is necessary and not sufficient. The two gates watch different
+things, and only one of them can see the corpus.

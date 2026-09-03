@@ -48,7 +48,46 @@ import {
 // tools disabled and hedged ("when you come back I can bring you a passage"),
 // which is the one thing she must never do.
 const MAX_TOOL_ROUNDS = 8;
+
+/**
+ * Passages a single reply may reference.
+ *
+ * The product is one person sitting with ONE thing long enough for it to change
+ * them. Two exists only for the case where a second passage does genuinely
+ * different work; a reply carrying more is a search result in a pastor's voice.
+ */
+const MAX_PASSAGES_IN_REPLY = 2;
 const RECENT_TURNS = 8;
+
+/**
+ * What she is doing right now, for a client that would otherwise show nothing.
+ *
+ * Rounds 1-3 produce no visible text — she is searching, reading and choosing —
+ * and on a p90 turn that is a blank screen for the better part of a minute.
+ * These events exist so a person can watch the one thing that makes her
+ * different from every other companion app: she is genuinely reading scripture
+ * before she answers.
+ *
+ * REAL EVENTS ONLY. Nothing here is emitted speculatively or on a timer; every
+ * one corresponds to work that has actually happened.
+ */
+export type TurnProgress =
+  | { type: "premise" }
+  | { type: "searching"; query: string }
+  | { type: "found"; references: string[] }
+  | { type: "reading"; reference: string }
+  | { type: "author"; name: string }
+  | { type: "choosing"; reference: string }
+  | { type: "writing" }
+  /** The reply is being replaced — grounding or the passage cap fired. */
+  | { type: "restart"; reason: string };
+
+export interface TurnOptions {
+  /** Called as work happens. Never on a timer. */
+  onProgress?: (event: TurnProgress) => void;
+  /** Called with each text delta of the reply as the model emits it. */
+  onToken?: (text: string) => void;
+}
 
 export interface TurnCost {
   model: string;
@@ -70,6 +109,8 @@ export interface TurnResult {
   grounded: boolean;
   regenerated: boolean;
   fellBack: boolean;
+  /** True when the reply had to be regenerated for referencing too many passages. */
+  citationCapRegenerated: boolean;
   /** Reasoning rounds actually spent. Each one is a model call. */
   reasoningRounds: number;
   /**
@@ -121,12 +162,20 @@ export async function runTurn(
   userId: Types.ObjectId,
   conversationId: Types.ObjectId,
   userMessage: string,
+  options: TurnOptions = {},
 ): Promise<TurnResult> {
   const startedAt = Date.now();
   const costs: TurnCost[] = [];
 
   try {
-    return await runTurnInner(userId, conversationId, userMessage, startedAt, costs);
+    return await runTurnInner(
+      userId,
+      conversationId,
+      userMessage,
+      startedAt,
+      costs,
+      options,
+    );
   } catch (error) {
     // NOTHING IS PERSISTED ON THIS PATH. persistTurn is called by the route
     // AFTER this returns, so a throw here means the turn did not happen at all
@@ -156,7 +205,15 @@ async function runTurnInner(
   userMessage: string,
   startedAt: number,
   costs: TurnCost[],
+  options: TurnOptions,
 ): Promise<TurnResult> {
+  const progress = (event: TurnProgress): void => {
+    try {
+      options.onProgress?.(event);
+    } catch {
+      // A client that has hung up must not take the turn down with it.
+    }
+  };
   // ---- 1. SAFETY GATE ------------------------------------------------------
   const safety = await classifyForSafety(userMessage);
   costs.push({
@@ -182,6 +239,7 @@ async function runTurnInner(
     return {
       reply: safety.response ?? "",
       safetyIntercepted: true,
+      citationCapRegenerated: false,
       roundTimings: [],
       safetyClassification: safety.classification,
       premiseVerdict: "not-run",
@@ -214,6 +272,7 @@ async function runTurnInner(
   );
 
   // ---- 3. PREMISE PASS -----------------------------------------------------
+  progress({ type: "premise" });
   const premise = await runPremisePass(userMessage, { recentTurns });
   costs.push({
     model: premise.modelUsed,
@@ -261,10 +320,15 @@ async function runTurnInner(
   let preSearched: string | null = null;
 
   try {
+    progress({ type: "searching", query: preSearchQuery });
     const seeded = await searchScriptureTool({ query: preSearchQuery }, toolContext);
     if (seeded.citations.length > 0) {
       preSearched = seeded.resultSummary;
       retrievedFromPreSearch.push(...seeded.citations.map((c) => c.ref));
+      progress({
+        type: "found",
+        references: seeded.citations.map((c) => c.ref),
+      });
     }
   } catch (error) {
     // A failed pre-search is a lost optimisation, not a lost turn. She still
@@ -337,7 +401,18 @@ async function runTurnInner(
       const toolNames: string[] = [];
 
       const modelStartedAt = Date.now();
-      const response = await getClient().chat.completions.create({
+
+      // STREAMED, ALWAYS.
+      //
+      // One code path rather than two: a caller without onToken simply ignores
+      // the deltas, and the assembled message is identical to what the
+      // non-streaming call returned. `include_usage` keeps cost reporting
+      // intact, which a naive switch to streaming silently loses.
+      //
+      // Which round writes the reply is not knowable in advance — she answers
+      // whenever she stops calling tools — so every round streams and the
+      // tool-call rounds simply emit no text.
+      const stream = await getClient().chat.completions.create({
         model: chosenModel,
         // Matched to the tier that was routed to, not to a constant: the cheap
         // tier answers most turns and does not need an extended chain, while a
@@ -349,23 +424,84 @@ async function runTurnInner(
           ? { tools: TOOL_DEFINITIONS, tool_choice: "none" as const }
           : { tools: TOOL_DEFINITIONS }),
         max_completion_tokens: 16_000,
+        stream: true,
+        stream_options: { include_usage: true },
       });
+
+      let content = "";
+      let announcedWriting = false;
+      const partialCalls: {
+        id: string;
+        name: string;
+        arguments: string;
+      }[] = [];
+      let usage: { prompt_tokens?: number; completion_tokens?: number } | null =
+        null;
+
+      for await (const chunk of stream) {
+        if (chunk.usage) usage = chunk.usage;
+
+        const delta = chunk.choices[0]?.delta;
+        if (!delta) continue;
+
+        if (delta.content) {
+          // The first text delta is the moment she starts writing, which is
+          // what a waiting person actually needs to see.
+          if (!announcedWriting) {
+            announcedWriting = true;
+            progress({ type: "writing" });
+          }
+          content += delta.content;
+          try {
+            options.onToken?.(delta.content);
+          } catch {
+            // A disconnected client must not fail the turn.
+          }
+        }
+
+        // Tool calls arrive in fragments and are assembled by index.
+        for (const part of delta.tool_calls ?? []) {
+          const at = part.index;
+          partialCalls[at] ??= { id: "", name: "", arguments: "" };
+          const slot = partialCalls[at];
+          if (!slot) continue;
+          if (part.id) slot.id = part.id;
+          if (part.function?.name) slot.name += part.function.name;
+          if (part.function?.arguments) slot.arguments += part.function.arguments;
+        }
+      }
 
       modelMs = Date.now() - modelStartedAt;
 
       costs.push({
         model: chosenModel,
-        tokensIn: response.usage?.prompt_tokens ?? 0,
-        tokensOut: response.usage?.completion_tokens ?? 0,
+        tokensIn: usage?.prompt_tokens ?? 0,
+        tokensOut: usage?.completion_tokens ?? 0,
       });
 
-      const choice = response.choices[0];
-      const message = choice?.message;
-      if (!message) break;
+      const assembled = partialCalls.filter((c) => c.name);
 
-      messages.push(message as OpenAI.Chat.ChatCompletionMessageParam);
+      const message: OpenAI.Chat.ChatCompletionMessageParam = {
+        role: "assistant",
+        content: content || null,
+        ...(assembled.length > 0
+          ? {
+              tool_calls: assembled.map((c) => ({
+                id: c.id,
+                type: "function" as const,
+                function: { name: c.name, arguments: c.arguments },
+              })),
+            }
+          : {}),
+      };
 
-      const calls = message.tool_calls ?? [];
+      messages.push(message);
+
+      const calls = assembled.map((c) => ({
+        id: c.id,
+        type: "function" as const,
+        function: { name: c.name, arguments: c.arguments },
+      }));
 
       if (calls.length === 0) {
         roundTimings.push({
@@ -377,7 +513,7 @@ async function runTurnInner(
         });
 
         return {
-          reply: message.content ?? "",
+          reply: content,
           citations,
           toolCalls,
           retrievedReferences,
@@ -400,6 +536,28 @@ async function runTurnInner(
 
         toolNames.push(call.function.name);
 
+        // WHAT SHE IS ACTUALLY DOING, named from the arguments she chose.
+        // Every one of these corresponds to work about to happen; none is a
+        // placeholder and none is on a timer.
+        try {
+          const args = JSON.parse(call.function.arguments) as {
+            query?: string;
+            reference?: string;
+          };
+
+          if (call.function.name === "search_scripture") {
+            progress({ type: "searching", query: args.query ?? "" });
+          } else if (call.function.name === "get_passage" && args.reference) {
+            progress({ type: "reading", reference: args.reference });
+          } else if (call.function.name === "get_author_context") {
+            progress({ type: "author", name: args.reference ?? "" });
+          } else if (call.function.name === "offer_carrying" && args.reference) {
+            progress({ type: "choosing", reference: args.reference });
+          }
+        } catch {
+          // Malformed arguments are the tool layer's problem, not progress's.
+        }
+
         const invocation = await executeTool(
           call.function.name,
           call.function.arguments,
@@ -413,6 +571,16 @@ async function runTurnInner(
         });
         citations.push(...invocation.citations);
         retrievedReferences.push(...invocation.citations.map((c) => c.ref));
+
+        if (
+          invocation.name === "search_scripture" &&
+          invocation.citations.length > 0
+        ) {
+          progress({
+            type: "found",
+            references: invocation.citations.map((c) => c.ref),
+          });
+        }
 
         messages.push({
           role: "tool",
@@ -449,6 +617,7 @@ async function runTurnInner(
   let attempt = await runReasoning();
   let regenerated = false;
   let fellBack = false;
+  let citationCapRegenerated = false;
   let emptyReply = false;
 
   // An empty reply is its own failure and must not be laundered into a
@@ -463,15 +632,26 @@ async function runTurnInner(
   }
 
   // ---- 5. GROUNDING CHECK --------------------------------------------------
-  let verdict = checkGrounding({
-    reply: attempt.reply,
-    retrievedReferences: attempt.retrievedReferences,
-    toolCallCount: attempt.toolCalls.length,
+  const groundingInputFor = (
+    a: typeof attempt,
+  ): { reply: string; retrievedReferences: string[]; toolCallCount: number } => ({
+    reply: a.reply,
+    // Pre-searched passages count on BOTH axes. She was handed them by a real
+    // tool call, so citing one is grounded, and a turn that needed no further
+    // search is the pre-search working rather than a reply with nothing behind
+    // it. The first check was missing this and the second had it, which meant a
+    // pre-search-only turn was regenerated for no reason.
+    retrievedReferences: [...a.retrievedReferences, ...retrievedFromPreSearch],
+    toolCallCount: a.toolCalls.length + retrievedFromPreSearch.length,
   });
+
+  let verdict = checkGrounding(groundingInputFor(attempt));
 
   if (!verdict.grounded || emptyReply) {
     if (!verdict.grounded) logGroundingFailure(verdict, 1);
     regenerated = true;
+    // Tokens for the discarded reply have already reached the client.
+    progress({ type: "restart", reason: "grounding" });
 
     attempt = await runReasoning(
       emptyReply
@@ -481,23 +661,64 @@ async function runTurnInner(
             "Do not cite anything from memory.",
     );
 
-    verdict = checkGrounding({
-      reply: attempt.reply,
-      // Pre-searched passages count on BOTH axes. She was handed them by a
-      // real tool call, so citing one is grounded, and a turn that needed no
-      // further search is the pre-search working rather than a reply with
-      // nothing behind it.
-      retrievedReferences: [
-        ...attempt.retrievedReferences,
-        ...retrievedFromPreSearch,
-      ],
-      toolCallCount: attempt.toolCalls.length + retrievedFromPreSearch.length,
-    });
+    verdict = checkGrounding(groundingInputFor(attempt));
 
     if (!verdict.grounded || !attempt.reply.trim()) {
       logGroundingFailure(verdict, 2);
       fellBack = true;
       attempt.reply = GROUNDING_FALLBACK;
+    }
+  }
+
+  // ---- 5b. CITATION CAP ----------------------------------------------------
+  //
+  // THE PROMPT LINE IS NOT WHAT HOLDS THIS. She was told "at most two passages,
+  // normally one" and obeyed it four times in five; the fifth reply announced
+  // "Two pieces of Scripture" and then cited three. A rule that holds four
+  // times in five is a suggestion, and scenario 11 was passing by luck.
+  //
+  // Same shape as the grounding check above: regenerate ONCE, then accept.
+  // Deliberately NOT a hard failure — a reply carrying three passages is
+  // off-brand, not harmful, and GROUNDING_FALLBACK in its place would be worse
+  // for the person reading it. The warning log is how a drift shows up.
+  if (!fellBack) {
+    const referenced = referencedPassages(attempt.reply);
+
+    if (referenced.length > MAX_PASSAGES_IN_REPLY) {
+      logger.warn(
+        { referenced, count: referenced.length, cap: MAX_PASSAGES_IN_REPLY },
+        "reply exceeded the passage cap; regenerating once",
+      );
+
+      citationCapRegenerated = true;
+      progress({ type: "restart", reason: "too many passages" });
+
+      attempt = await runReasoning(
+        `Your previous answer referenced ${referenced.length} passages: ` +
+          `${referenced.join(", ")}. That is a reading list, not something a ` +
+          "person can sit with. Rewrite it around ONE passage — two only if the " +
+          "second does genuinely different work — and say why you chose that " +
+          "one. Do not name the others at all.",
+      );
+
+      // Regenerating can break grounding, so it is rechecked rather than assumed.
+      verdict = checkGrounding(groundingInputFor(attempt));
+
+      if (!verdict.grounded || !attempt.reply.trim()) {
+        logGroundingFailure(verdict, 2);
+        fellBack = true;
+        attempt.reply = GROUNDING_FALLBACK;
+      } else {
+        const after = referencedPassages(attempt.reply);
+        if (after.length > MAX_PASSAGES_IN_REPLY) {
+          // Accepted anyway. One regeneration is the budget; a second would
+          // cost another 20 seconds to fix something nobody is harmed by.
+          logger.warn(
+            { referenced: after, count: after.length },
+            "reply STILL over the passage cap after regenerating — accepting it",
+          );
+        }
+      }
     }
   }
 
@@ -532,6 +753,7 @@ async function runTurnInner(
     grounded: verdict.grounded && !fellBack,
     regenerated,
     fellBack,
+    citationCapRegenerated,
     reasoningRounds: attempt.rounds,
     roundTimings: attempt.timings,
   };
