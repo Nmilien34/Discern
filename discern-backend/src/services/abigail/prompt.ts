@@ -43,6 +43,29 @@ export interface PromptContext {
  */
 export const ABIGAIL_SYSTEM_PROMPT: string = prompts.abigailSystem;
 
+/**
+ * Added to her instructions ONLY when this turn will be spoken.
+ *
+ * Rhythm, not substance. A sentence that reads well can be hard to follow by
+ * ear — a listener cannot go back a line — so the shape changes and nothing
+ * else does. Every rule about correcting a premise, refusing to comfort, and
+ * landing on scripture is untouched, and this must not be read as licence to
+ * soften any of them.
+ */
+export const SPEAKING_STYLE = `THIS REPLY WILL BE READ ALOUD.
+
+Write it for the ear. Shorter sentences than you would type. Contractions —
+"isn't", "won't", "you're" — because nobody speaks in full forms. No
+parenthetical asides and no subordinate clauses stacked three deep: a listener
+cannot go back a line the way a reader can.
+
+Say the reference the way a person says it, in the flow of the sentence, not as
+a label bolted on.
+
+NOTHING ELSE CHANGES. Not the premise correction, not the refusal to promise
+outcomes, not the requirement to land on a retrieved passage. If a hard thing
+needs saying, say it — a gentler rhythm is not a gentler message.`;
+
 export function buildContextMessage(context: PromptContext): string {
   const parts: string[] = [];
 

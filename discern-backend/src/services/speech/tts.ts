@@ -28,6 +28,7 @@ export interface VoiceSettings {
   similarity_boost: number;
   style: number;
   use_speaker_boost: boolean;
+  speed: number;
 }
 
 /** From config, never hardcoded — `style` is tuned by ear, not by deploy. */
@@ -37,6 +38,7 @@ export function voiceSettings(): VoiceSettings {
     similarity_boost: env.ELEVENLABS_SIMILARITY_BOOST,
     style: env.ELEVENLABS_STYLE,
     use_speaker_boost: env.ELEVENLABS_SPEAKER_BOOST,
+    speed: env.ELEVENLABS_SPEED,
   };
 }
 

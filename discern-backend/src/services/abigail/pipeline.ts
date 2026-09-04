@@ -35,9 +35,14 @@ import {
   logGroundingFailure,
 } from "./grounding";
 import { runPremisePass } from "./premise";
+import { speakableProse } from "../speech/reference-speech";
 import { SentenceSplitter, speakable } from "../speech/sentences";
 import { synthesize } from "../speech/tts";
-import { ABIGAIL_SYSTEM_PROMPT, buildContextMessage } from "./prompt";
+import {
+  ABIGAIL_SYSTEM_PROMPT,
+  buildContextMessage,
+  SPEAKING_STYLE,
+} from "./prompt";
 import {
   activeCarryingsFor,
   executeTool,
@@ -417,7 +422,10 @@ async function runTurnInner(
   let audioIndex = 0;
 
   const speakSentence = (sentence: string): void => {
-    const text = speakable(sentence);
+    // Expand references for the EAR only. "Ephesians 2:8-10" read literally
+    // comes out "Ephesians two colon eight dash ten"; a person says "Ephesians
+    // chapter two, verses eight through ten". What is on screen is untouched.
+    const text = speakable(speakableProse(sentence));
     if (!text) return;
 
     // Once refused, stop asking. A tripped ceiling stays tripped for the day,
@@ -478,6 +486,11 @@ async function runTurnInner(
   }> => {
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
       { role: "system", content: ABIGAIL_SYSTEM_PROMPT },
+      // Only when it will actually be heard. With speech off her writing is
+      // unchanged, which is the point of it being a separate instruction.
+      ...(spokenReply.requested
+        ? [{ role: "system" as const, content: SPEAKING_STYLE }]
+        : []),
       { role: "system", content: contextMessage },
       ...priorMessages.map((m) => ({
         role: m.role === "user" ? ("user" as const) : ("assistant" as const),

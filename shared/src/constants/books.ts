@@ -27,6 +27,28 @@ export interface BookMeta {
    * both reduce to "1cor" and only that form needs listing.
    */
   aliases: string[];
+  /**
+   * How the name is SAID, when that differs from how it is written.
+   *
+   * Only set where the written form would be read wrongly. "Psalms 27:1" is
+   * spoken "Psalm twenty-seven" — singular, because you are naming one psalm
+   * out of the book — and everything else derives from `name` plus
+   * `chapterCount`, so this stays almost empty by design.
+   *
+   * THE SINGLE PLACE A PRONUNCIATION IS FIXED. There are no reference strings
+   * in the speech code; it reads this table and the structure of the parsed
+   * reference. A new book or an awkward name is a data change here.
+   */
+  spokenName?: string;
+  /**
+   * The word before a chapter number when spoken, or null for none.
+   *
+   * Defaults to "chapter". Psalms sets it to null because the number IS the
+   * psalm — "Psalm twenty-seven", never "Psalm chapter twenty-seven" — and no
+   * amount of cleverness in the speech code would derive that from a name and
+   * a chapter count. It is a fact about the book, so it lives with the book.
+   */
+  spokenChapterWord?: string | null;
 }
 
 export const BOOKS: readonly BookMeta[] = [
@@ -49,7 +71,7 @@ export const BOOKS: readonly BookMeta[] = [
   { usfmId: "NEH", slug: "nehemiah", name: "Nehemiah", testament: "old", canonicalOrder: 16, chapterCount: 13, aliases: ["neh", "ne"] },
   { usfmId: "EST", slug: "esther", name: "Esther", testament: "old", canonicalOrder: 17, chapterCount: 10, aliases: ["est", "esth"] },
   { usfmId: "JOB", slug: "job", name: "Job", testament: "old", canonicalOrder: 18, chapterCount: 42, aliases: ["jb"] },
-  { usfmId: "PSA", slug: "psalms", name: "Psalms", testament: "old", canonicalOrder: 19, chapterCount: 150, aliases: ["psa", "ps", "psalm", "pss"] },
+  { usfmId: "PSA", slug: "psalms", name: "Psalms", testament: "old", canonicalOrder: 19, chapterCount: 150, aliases: ["psa", "ps", "psalm", "pss"], spokenName: "Psalm", spokenChapterWord: null },
   { usfmId: "PRO", slug: "proverbs", name: "Proverbs", testament: "old", canonicalOrder: 20, chapterCount: 31, aliases: ["pro", "prov", "pr"] },
   { usfmId: "ECC", slug: "ecclesiastes", name: "Ecclesiastes", testament: "old", canonicalOrder: 21, chapterCount: 12, aliases: ["ecc", "eccl", "ec", "qoh"] },
   { usfmId: "SNG", slug: "song-of-solomon", name: "Song of Solomon", testament: "old", canonicalOrder: 22, chapterCount: 8, aliases: ["sng", "song", "songofsongs", "sos", "canticles"] },

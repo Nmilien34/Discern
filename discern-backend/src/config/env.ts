@@ -270,6 +270,14 @@ const envSchema = z.object({
   ELEVENLABS_STABILITY: z.coerce.number().min(0).max(1).default(0.45),
   ELEVENLABS_SIMILARITY_BOOST: z.coerce.number().min(0).max(1).default(0.75),
   ELEVENLABS_STYLE: z.coerce.number().min(0).max(1).default(0.35),
+  /**
+   * Playback rate, where the model supports it. 1 is the voice's own pace.
+   *
+   * Tuned by ear like `style`, so it is config: a read that is a shade too
+   * brisk to sit with is a product problem, not a deploy.
+   */
+  ELEVENLABS_SPEED: z.coerce.number().min(0.7).max(1.2).default(1),
+
   ELEVENLABS_SPEAKER_BOOST: z.enum(["true", "false"]).default("true")
     .transform((v) => v === "true"),
 
