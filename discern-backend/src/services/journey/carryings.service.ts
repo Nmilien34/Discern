@@ -62,15 +62,25 @@ async function hydrate(carrying: CarryingDocument): Promise<Carrying> {
 
 export async function listCarryings(
   userId: Types.ObjectId,
+  options: { releasedLimit?: number } = {},
 ): Promise<CarryingsListResponse> {
   const all = await CarryingModel.find({ userId }).sort({ addedAt: -1 });
 
   const active = all.filter((c) => c.releasedAt === null);
-  const released = all.filter((c) => c.releasedAt !== null);
+  const allReleased = all.filter((c) => c.releasedAt !== null);
+
+  // RELEASED CARRYINGS ARE KEPT FOREVER (ARCHITECTURE.md 6) and that is
+  // deliberate — what someone carried a year ago and what they did with it is
+  // the record this app exists to build. But "kept forever" and "returned in
+  // full on every call" are different things, and the screen that mostly wants
+  // the active three should not carry years of history to get them.
+  const releasedLimit = options.releasedLimit ?? 25;
+  const released = allReleased.slice(0, releasedLimit);
 
   return {
     active: await Promise.all(active.map(hydrate)),
     released: await Promise.all(released.map(hydrate)),
+    releasedTotal: allReleased.length,
     activeCap: env.ACTIVE_CARRYING_CAP,
     atCap: active.length >= env.ACTIVE_CARRYING_CAP,
   };

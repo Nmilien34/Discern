@@ -12,7 +12,7 @@ import {
   abigailTurnLimiters,
   transcribeLimiter,
 } from "../middleware/rate-limit.middleware";
-import { validateBody } from "../middleware/validate.middleware";
+import { validateBody, validateQuery } from "../middleware/validate.middleware";
 import { ConversationModel, MessageModel, UserModel } from "../models";
 import { persistTurn, runTurn } from "../services/abigail/pipeline";
 import { transcribe } from "../services/speech/stt";
@@ -21,6 +21,14 @@ export const abigailRouter: Router = Router();
 
 const startConversationSchema = z
   .object({ mode: z.enum(["text", "voice"]).default("text") })
+  .strict();
+
+const listConversationsSchema = z
+  .object({
+    limit: z.coerce.number().int().min(1).max(50).default(20),
+    /** ISO timestamp from a previous page's `nextBefore`. */
+    before: z.string().datetime().optional(),
+  })
   .strict();
 
 const sendMessageSchema = z
@@ -266,6 +274,83 @@ abigailRouter.post(
       text: result.text,
       seconds: result.seconds,
       ...(result.refusedReason ? { refusedReason: result.refusedReason } : {}),
+    });
+  }),
+);
+
+/**
+ * GET /v1/abigail/conversations
+ *
+ * The history list. Paginated, most recent first, and carrying enough per row
+ * to render the screen WITHOUT a second call per conversation — a list view
+ * that needs one request per row is a list view that stalls on a slow phone.
+ *
+ * `summary` is the opening of what THEY said, not of what she replied. A person
+ * scanning their own history is looking for the evening they brought something,
+ * and her answer is not what they remember it by.
+ */
+abigailRouter.get(
+  "/conversations",
+  requireAuth,
+  loadUser,
+  validateQuery(listConversationsSchema),
+  asyncHandler(async (req, res) => {
+    const userId = req.currentUser!._id;
+    const { limit, before } = req.query as unknown as {
+      limit: number;
+      before?: string;
+    };
+
+    // Cursor on startedAt rather than an offset: pages stay stable while new
+    // conversations arrive at the top, which offsets do not.
+    const conversations = await ConversationModel.find({
+      userId,
+      ...(before ? { startedAt: { $lt: new Date(before) } } : {}),
+    })
+      .sort({ startedAt: -1 })
+      .limit(limit + 1)
+      .lean();
+
+    const page = conversations.slice(0, limit);
+    const hasMore = conversations.length > limit;
+
+    const messages = await MessageModel.find({
+      conversationId: { $in: page.map((c) => c._id) },
+    })
+      .sort({ createdAt: 1 })
+      .select("conversationId role content citations createdAt")
+      .lean();
+
+    const byConversation = new Map<string, typeof messages>();
+    for (const m of messages) {
+      const key = String(m.conversationId);
+      byConversation.set(key, [...(byConversation.get(key) ?? []), m]);
+    }
+
+    sendData(res, {
+      conversations: page.map((conversation) => {
+        const rows = byConversation.get(String(conversation._id)) ?? [];
+        const firstFromThem = rows.find((m) => m.role === "user");
+        const last = rows[rows.length - 1];
+
+        return {
+          id: String(conversation._id),
+          mode: conversation.mode,
+          startedAt: conversation.startedAt.toISOString(),
+          lastMessageAt: (last?.createdAt ?? conversation.startedAt).toISOString(),
+          messageCount: rows.length,
+          summary: firstFromThem
+            ? firstFromThem.content.slice(0, 140)
+            : null,
+          // What she gave them in this conversation, deduplicated — the thing
+          // most worth seeing in a list of past evenings.
+          passages: [
+            ...new Set(rows.flatMap((m) => m.citations.map((c) => c.ref))),
+          ],
+        };
+      }),
+      // Cursor, not a page number, for the same reason as above.
+      nextBefore: hasMore ? page[page.length - 1]?.startedAt.toISOString() : null,
     });
   }),
 );

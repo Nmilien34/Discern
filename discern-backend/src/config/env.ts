@@ -402,6 +402,25 @@ const envSchema = z.object({
   REVENUECAT_WEBHOOK_SECRET: z.string().min(1, "REVENUECAT_WEBHOOK_SECRET is required"),
   REVENUECAT_SECRET_API_KEY: z.string().min(1).optional(),
 
+  // ---- Store product identifiers -------------------------------------------
+  //
+  // IDENTIFIERS ONLY. THE SERVER NEVER STATES A PRICE.
+  //
+  // The client resolves the real price from StoreKit, so localization,
+  // currency, regional pricing and any change made in App Store Connect are
+  // correct automatically and cannot drift from what the server believes. A
+  // backend that hardcodes "$39.99" is a backend that will one day tell a
+  // British user the wrong number in the wrong currency, and it will be right
+  // in the code and wrong on the screen.
+  //
+  // ARCHITECTURE.md 10 records $39.99/yr and $9.99/mo as INTENT. App Store
+  // Connect is the source of truth. Those figures appear nowhere in this
+  // codebase and must not be added.
+  APPLE_PRODUCT_ANNUAL: z.string().min(1).default("discern.annual"),
+  APPLE_PRODUCT_MONTHLY: z.string().min(1).default("discern.monthly"),
+  GOOGLE_PRODUCT_ANNUAL: z.string().min(1).optional(),
+  GOOGLE_PRODUCT_MONTHLY: z.string().min(1).optional(),
+
   // ---- Auth: REQUIRED FROM PHASE 4 -----------------------------------------
   // Phase 4 issues tokens, so the secret is now load-bearing. Byte-measured, not
   // character-counted (see secretByteLength).

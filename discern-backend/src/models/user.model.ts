@@ -37,6 +37,21 @@ export interface UserEntitlementDocument {
   verificationState: "verified" | "stale" | "unavailable";
 }
 
+/**
+ * One completed onboarding step.
+ *
+ * STEPS, NOT A BOOLEAN, and this is the point of the design. A single
+ * `onboardingComplete` flag means that adding a step later either re-runs the
+ * whole flow for every existing user or silently skips it for all of them.
+ * Recording what was completed and when lets a later change re-run only the
+ * new part.
+ */
+export interface OnboardingStepDocument {
+  /** Stable identifier, e.g. "welcome", "chose-stage", "first-carrying". */
+  step: string;
+  completedAt: Date;
+}
+
 export interface UserPreferencesDocument {
   translationId: Types.ObjectId | null;
   /**
@@ -95,6 +110,15 @@ export interface UserDocument extends Document<Types.ObjectId> {
    * survivor rather than to "user no longer exists".
    */
   mergedIntoUserId: Types.ObjectId | null;
+  /**
+   * What this person has been through, SERVER-SIDE.
+   *
+   * Not local storage. The whole auth promise of this app is that reinstalling
+   * loses nothing — carryings, memory, what she knows about you — and
+   * onboarding re-running on a new phone breaks that promise in the first five
+   * seconds, before anything good has happened.
+   */
+  onboarding: OnboardingStepDocument[];
   lastActiveAt: Date;
   /** Enforces at most one notification a day. Null until the first one. */
   lastNotifiedAt: Date | null;
@@ -153,6 +177,19 @@ const userSchema = new Schema<UserDocument>(
     preferences: { type: preferencesSchema, required: true, default: () => ({}) },
     abigailConversationsStarted: { type: Number, required: true, default: 0, min: 0 },
     mergedIntoUserId: { type: Schema.Types.ObjectId, ref: "User", default: null },
+    onboarding: {
+      type: [
+        new Schema(
+          {
+            step: { type: String, required: true, trim: true },
+            completedAt: { type: Date, required: true, default: () => new Date() },
+          },
+          { _id: false },
+        ),
+      ],
+      required: true,
+      default: [],
+    },
     lastActiveAt: { type: Date, required: true, default: () => new Date() },
     lastNotifiedAt: { type: Date, default: null },
   },

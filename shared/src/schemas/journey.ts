@@ -83,6 +83,14 @@ export const carryingsListResponseSchema = z
     active: z.array(carryingSchema),
     released: z.array(carryingSchema),
     /**
+     * How many released carryings exist in total.
+     *
+     * `released` is a bounded page; this is the truth. Released carryings are
+     * kept forever by design, so the count keeps growing while the payload
+     * does not.
+     */
+    releasedTotal: z.number().int().nonnegative(),
+    /**
      * The soft cap. Not a technical limit — the thesis. You cannot dwell on ten
      * things, and an unbounded list turns carryings into a reading queue.
      */

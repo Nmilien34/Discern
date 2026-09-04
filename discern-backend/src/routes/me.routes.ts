@@ -1,4 +1,7 @@
-import { notificationPreferencesSchema } from "@discern/shared";
+import {
+  notificationPreferencesSchema,
+  onboardingStepSchema,
+} from "@discern/shared";
 import { Router } from "express";
 
 import { asyncHandler } from "../lib/async-handler";
@@ -34,6 +37,12 @@ meRouter.get(
         verificationState: user.entitlement.verificationState,
       },
       currentStageSlug: user.currentStageSlug,
+      // What they have already been through, so the app re-runs only what is
+      // new rather than the whole flow on a reinstall.
+      onboarding: user.onboarding.map((s) => ({
+        step: s.step,
+        completedAt: s.completedAt.toISOString(),
+      })),
       preferences: {
         notificationTime: user.preferences.notificationTime,
         timezone: user.preferences.timezone,
@@ -102,6 +111,45 @@ meRouter.put(
       // Said back explicitly so a client cannot assume registering was enough.
       willNotify: Boolean(user?.preferences.pushToken && user?.preferences.notificationTime),
       speakReplies: user?.preferences.speakReplies ?? null,
+    });
+  }),
+);
+
+/**
+ * POST /v1/me/onboarding
+ *
+ * Records that a step was completed. Idempotent: completing the same step
+ * twice keeps the FIRST timestamp, because the question this answers is "has
+ * this person been through it", not "when did they last tap it".
+ *
+ * There is no endpoint to clear a step. Onboarding is a thing that happened,
+ * and un-happening it is not a product need.
+ */
+meRouter.post(
+  "/onboarding",
+  requireAuth,
+  loadUser,
+  validateBody(onboardingStepSchema),
+  asyncHandler(async (req, res) => {
+    const { step } = req.body as { step: string };
+
+    // $addToSet on `step` alone will not do — the documents carry a timestamp
+    // and would never compare equal — so completion is checked explicitly.
+    const already = req.currentUser!.onboarding.some((s) => s.step === step);
+
+    const user = already
+      ? req.currentUser!
+      : await UserModel.findOneAndUpdate(
+          { _id: req.currentUser!._id },
+          { $push: { onboarding: { step, completedAt: new Date() } } },
+          { new: true },
+        );
+
+    sendData(res, {
+      completed: (user?.onboarding ?? []).map((s) => ({
+        step: s.step,
+        completedAt: s.completedAt.toISOString(),
+      })),
     });
   }),
 );

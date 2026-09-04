@@ -26,7 +26,18 @@ carryingsRouter.get(
   requireAuth,
   loadUser,
   asyncHandler(async (req, res) => {
-    sendData(res, await listCarryings(req.currentUser!._id));
+    // `releasedLimit=0` gives the active list alone, for a screen that only
+    // needs the three. `releasedTotal` always reports the true count.
+    const limit = Number((req.query as { releasedLimit?: string }).releasedLimit);
+
+    sendData(
+      res,
+      await listCarryings(req.currentUser!._id, {
+        ...(Number.isInteger(limit) && limit >= 0
+          ? { releasedLimit: Math.min(limit, 200) }
+          : {}),
+      }),
+    );
   }),
 );
 

@@ -28,30 +28,6 @@ export const deviceAuthRequestSchema = z
 export type DeviceAuthRequest = z.infer<typeof deviceAuthRequestSchema>;
 
 /**
- * The two products.
- *
- * ONE SUBSCRIPTION GROUP so RevenueCat resolves a single entitlement and a
- * person can move between them without ending up with two, or losing their
- * place. The 7-day trial is an introductory offer on the ANNUAL sku ONLY —
- * monthly charges immediately — which is what makes annual the obvious pick and
- * stops anyone cycling monthly trials.
- */
-export const SUBSCRIPTION_PRODUCTS = [
-  {
-    sku: "discern.annual",
-    period: "annual" as const,
-    priceUsd: 39.99,
-    trialDays: 7,
-  },
-  {
-    sku: "discern.monthly",
-    period: "monthly" as const,
-    priceUsd: 9.99,
-    trialDays: 0,
-  },
-];
-
-/**
  * POST /v1/auth/link
  *
  * Attaches a durable account identity to the CURRENT device user, or merges the
@@ -203,3 +179,21 @@ export const notificationPreferencesSchema = z
 export type NotificationPreferencesRequest = z.infer<
   typeof notificationPreferencesSchema
 >;
+
+/**
+ * POST /v1/me/onboarding
+ *
+ * A step identifier, not a boolean. Recording which steps are done lets a
+ * later onboarding change re-run only the new part instead of the whole flow.
+ */
+export const onboardingStepSchema = z
+  .object({
+    step: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(/^[a-z0-9-]+$/, "step must be lowercase kebab-case"),
+  })
+  .strict();
+
+export type OnboardingStepRequest = z.infer<typeof onboardingStepSchema>;

@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { asyncHandler } from "../lib/async-handler";
 import { sendData } from "../lib/responses";
+import { AuthorModel, BookModel } from "../models";
 import { validateQuery } from "../middleware/validate.middleware";
 import {
   getAuthorBySlug,
@@ -23,6 +24,57 @@ export const bibleRouter: Router = Router();
 const translationQuerySchema = z
   .object({ translation: z.string().min(1).max(16).optional() })
   .passthrough();
+
+/**
+ * GET /v1/bible/books
+ *
+ * The table of contents. One call serves BOTH navigations the app offers:
+ * book-first, in canonical order, and author-first, because each row carries
+ * its author link.
+ *
+ * Sourced from the seeded books collection rather than the shared BOOKS
+ * constant, because only the database knows which books have an author
+ * document — several have none, and that is a fact about the text rather than
+ * missing data.
+ */
+bibleRouter.get(
+  "/books",
+  asyncHandler(async (_req, res) => {
+    const books = await BookModel.find({})
+      .sort({ canonicalOrder: 1 })
+      .select("slug name testament canonicalOrder chapterCount authorId")
+      .lean();
+
+    const authors = await AuthorModel.find({
+      _id: { $in: books.map((b) => b.authorId).filter(Boolean) },
+    })
+      .select("slug name era")
+      .lean();
+
+    const authorById = new Map(authors.map((a) => [String(a._id), a]));
+
+    sendData(res, {
+      books: books.map((book) => {
+        const author = book.authorId
+          ? authorById.get(String(book.authorId))
+          : undefined;
+
+        return {
+          slug: book.slug,
+          name: book.name,
+          testament: book.testament,
+          canonicalOrder: book.canonicalOrder,
+          chapterCount: book.chapterCount,
+          // Null where nobody knows who wrote it. The app should render that
+          // as unknown rather than hiding the book.
+          author: author
+            ? { slug: author.slug, name: author.name, era: author.era }
+            : null,
+        };
+      }),
+    });
+  }),
+);
 
 bibleRouter.get(
   "/authors",
