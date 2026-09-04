@@ -244,12 +244,43 @@ export async function scheduleRecurring(): Promise<void> {
   });
 
   // One summary job per user who spoke to her yesterday. Keyed by user and day.
+  //
+  // THE USER MUST STILL EXIST. `distinct("userId")` reads the conversations
+  // collection, which knows nothing about whether that account is still there —
+  // and a deleted user leaves its conversations behind. On 2026-09-04 that
+  // meant 442 "active users" against 29 real ones, and the worker spent 732
+  // gpt-5-mini calls summarising conversations for accounts that had been
+  // cleaned up after eval runs.
+  //
+  // Summarising a deleted user is not just wasted money. It writes a
+  // UserMemory document keyed to an id nothing points at, which is a slow leak
+  // of exactly the private material this app should be shedding when an
+  // account goes.
   const since = new Date(Date.now() - 36 * 60 * 60 * 1000);
   const active = await ConversationModel.distinct("userId", {
     startedAt: { $gte: since },
   });
 
+  const live = new Set(
+    (
+      await UserModel.find({ _id: { $in: active } })
+        .select("_id")
+        .lean()
+    ).map((u) => String(u._id)),
+  );
+
+  const orphaned = active.length - live.size;
+
+  if (orphaned > 0) {
+    logger.warn(
+      { active: active.length, live: live.size, orphaned },
+      "conversations exist for users that no longer do; skipping their summaries",
+    );
+  }
+
   for (const userId of active) {
+    if (!live.has(String(userId))) continue;
+
     await enqueue({
       type: "memory-summarize",
       idempotencyKey: `memory-summarize:${String(userId)}:${dayKey}`,

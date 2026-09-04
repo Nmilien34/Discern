@@ -18,7 +18,8 @@
 import { models } from "../config/models";
 import { openaiFor } from "../lib/openai-client";
 import { logger } from "../lib/logger";
-import { ConversationModel, MessageModel, UserMemoryModel } from "../models";
+import { TerminalJobError } from "./queue";
+import { ConversationModel, MessageModel, UserMemoryModel, UserModel } from "../models";
 
 const MAX_OPEN_THREADS = 3;
 
@@ -66,6 +67,17 @@ const SCHEMA = {
  * threads.
  */
 export async function summarizeYesterday(userId: string): Promise<number> {
+  // Belt and braces with the scheduler's check. A user can be deleted between
+  // the sweep and the job running, and summarising a deleted account writes
+  // memory nothing will ever read or clean up.
+  const user = await UserModel.findById(userId).select("_id").lean();
+  if (!user) {
+    throw new TerminalJobError(
+      `User ${userId} no longer exists; there is nothing to summarise.`,
+      "invalid-payload",
+    );
+  }
+
   const since = new Date(Date.now() - 36 * 60 * 60 * 1000);
 
   const conversations = await ConversationModel.find({
