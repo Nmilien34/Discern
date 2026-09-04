@@ -19,7 +19,7 @@ import { logger } from "../../lib/logger";
 import { SpeechCacheModel } from "../../models";
 import { audioUrl, putAudio, speechKey } from "./storage";
 import { releaseSpeechSpend, reserveSpeechSpend } from "./spend";
-import type { SpendScope } from "./spend";
+import type { SpendScope, SpeechPurpose } from "./spend";
 
 const API = "https://api.elevenlabs.io/v1";
 
@@ -99,6 +99,14 @@ export async function synthesize(
      * on the large operator budget — the safe direction is the tight one.
      */
     scope?: SpendScope;
+    /**
+     * Scripture or her own prose. Reporting only — the ceiling is shared.
+     *
+     * Defaults to "scripture" because that was the only caller for a day, and
+     * a mislabelled scripture line is far less dangerous than prose hiding
+     * inside the number that is supposed to plateau.
+     */
+    purpose?: SpeechPurpose;
   } = {},
 ): Promise<SynthesisResult | null> {
   const clean = text.trim();
@@ -124,8 +132,15 @@ export async function synthesize(
 
   // ---- 2. THE CEILING, before a single character is sent.
   const scope: SpendScope = options.scope ?? "serving";
+  const purpose: SpeechPurpose = options.purpose ?? "scripture";
 
-  const decision = await reserveSpeechSpend(userId, "tts", clean.length, scope);
+  const decision = await reserveSpeechSpend(
+    userId,
+    "tts",
+    clean.length,
+    scope,
+    purpose,
+  );
 
   if (!decision.allowed) {
     return {

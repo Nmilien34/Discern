@@ -189,6 +189,14 @@ export const notificationPreferencesSchema = z
       .optional(),
     /** IANA zone, e.g. "America/New_York". Without it a time means nothing. */
     timezone: z.string().min(1).max(64).nullable().optional(),
+    /**
+     * Should Abigail's own prose be spoken to this person?
+     *
+     * null defers to the deployment's SPEAK_REPLIES; true and false override
+     * it. This is what lets a subset of testers hear her while everyone else
+     * reads her, which a deployment flag alone cannot express.
+     */
+    speakReplies: z.boolean().nullable().optional(),
   })
   .strict();
 

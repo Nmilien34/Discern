@@ -38,6 +38,7 @@ meRouter.get(
         notificationTime: user.preferences.notificationTime,
         timezone: user.preferences.timezone,
         pushRegistered: Boolean(user.preferences.pushToken),
+        speakReplies: user.preferences.speakReplies,
         translationId: user.preferences.translationId
           ? String(user.preferences.translationId)
           : null,
@@ -76,6 +77,7 @@ meRouter.put(
       pushToken?: string | null;
       notificationTime?: string | null;
       timezone?: string | null;
+      speakReplies?: boolean | null;
     };
 
     const update: Record<string, unknown> = {};
@@ -83,6 +85,9 @@ meRouter.put(
     if (body.notificationTime !== undefined)
       update["preferences.notificationTime"] = body.notificationTime;
     if (body.timezone !== undefined) update["preferences.timezone"] = body.timezone;
+    // null clears the override and defers to SPEAK_REPLIES again.
+    if (body.speakReplies !== undefined)
+      update["preferences.speakReplies"] = body.speakReplies;
 
     const user = await UserModel.findOneAndUpdate(
       { _id: req.currentUser!._id },
@@ -96,6 +101,7 @@ meRouter.put(
       timezone: user?.preferences.timezone ?? null,
       // Said back explicitly so a client cannot assume registering was enough.
       willNotify: Boolean(user?.preferences.pushToken && user?.preferences.notificationTime),
+      speakReplies: user?.preferences.speakReplies ?? null,
     });
   }),
 );

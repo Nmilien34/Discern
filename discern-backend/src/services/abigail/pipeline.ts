@@ -14,6 +14,7 @@
 import OpenAI from "openai";
 import type { Types } from "mongoose";
 
+import { env } from "../../config/env";
 import { effort, models } from "../../config/models";
 import { logger } from "../../lib/logger";
 import {
@@ -34,6 +35,8 @@ import {
   logGroundingFailure,
 } from "./grounding";
 import { runPremisePass } from "./premise";
+import { SentenceSplitter, speakable } from "../speech/sentences";
+import { synthesize } from "../speech/tts";
 import { ABIGAIL_SYSTEM_PROMPT, buildContextMessage } from "./prompt";
 import {
   activeCarryingsFor,
@@ -81,12 +84,26 @@ export type TurnProgress =
   | { type: "writing" }
   /** The reply is being replaced — grounding or the passage cap fired. */
   | { type: "restart"; reason: string }
+  /** A sentence of her reply has been synthesized and can play now. */
+  | { type: "audio"; url: string; text: string; index: number }
   /** Voice is off for this turn. She still answers, in text. */
   | { type: "audio-unavailable"; reason: string };
 
 export interface TurnOptions {
   /** Called as work happens. Never on a timer. */
   onProgress?: (event: TurnProgress) => void;
+  /**
+   * Speak her reply, sentence by sentence, as she writes it.
+   *
+   * OFF unless the caller says otherwise, and the caller is expected to have
+   * resolved SPEAK_REPLIES and the user's own preference first — this is the
+   * mechanism, not the policy.
+   *
+   * Sentence-level rather than whole-reply because waiting for the full text
+   * would add a second wait on top of a forty-nine second one. The first
+   * sentence is audible while she is still writing the third.
+   */
+  speakReply?: boolean;
   /** Called with each text delta of the reply as the model emits it. */
   onToken?: (text: string) => void;
 }
@@ -111,6 +128,19 @@ export interface TurnResult {
   grounded: boolean;
   regenerated: boolean;
   fellBack: boolean;
+  /**
+   * What speaking her PROSE cost this turn. Never merged with scripture audio.
+   *
+   * Scripture is a one-time permanent asset; this is recurring and caches
+   * nothing, because no two replies are alike. Reported apart so a grant burn
+   * cannot look healthy on the strength of the half that plateaus.
+   */
+  spokenReply: {
+    requested: boolean;
+    sentences: number;
+    charactersSynthesized: number;
+    refusedReason: string | null;
+  };
   /** True when the reply had to be regenerated for referencing too many passages. */
   citationCapRegenerated: boolean;
   /** Reasoning rounds actually spent. Each one is a model call. */
@@ -242,6 +272,15 @@ async function runTurnInner(
     return {
       reply: safety.response ?? "",
       safetyIntercepted: true,
+      // Crisis resources are NOT read aloud. The written response exists so
+      // the app gets out of the way; a synthesized voice reading a hotline
+      // number to someone in crisis is the app inserting itself again.
+      spokenReply: {
+        requested: false,
+        sentences: 0,
+        charactersSynthesized: 0,
+        refusedReason: null,
+      },
       citationCapRegenerated: false,
       roundTimings: [],
       safetyClassification: safety.classification,
@@ -354,6 +393,78 @@ async function runTurnInner(
     openThreads: (memory?.openThreads ?? []).map((t) => t.text),
     preSearched,
   });
+
+  // ---- VOICE, SENTENCE BY SENTENCE -----------------------------------------
+  //
+  // Synthesis runs ALONGSIDE writing rather than after it. She streams tokens;
+  // each completed sentence goes for synthesis immediately, so the first audio
+  // plays while she is still on the second paragraph.
+  //
+  // Deliberately fire-and-forget: a synthesis that is slow, refused or failing
+  // must never hold up the text, which is the product. Voice is the upgrade.
+  //
+  // Same voice as scripture, deliberately — Briony reads both, so the reply and
+  // the passage do not sound like two different people having one conversation.
+  const spokenReply = {
+    requested: options.speakReply === true && env.VOICE_ENABLED,
+    sentences: 0,
+    charactersSynthesized: 0,
+    refusedReason: null as string | null,
+  };
+
+  const splitter = new SentenceSplitter();
+  const pendingAudio: Promise<void>[] = [];
+  let audioIndex = 0;
+
+  const speakSentence = (sentence: string): void => {
+    const text = speakable(sentence);
+    if (!text) return;
+
+    // Once refused, stop asking. A tripped ceiling stays tripped for the day,
+    // and re-asking per sentence is the retry loop it exists to stop.
+    if (spokenReply.refusedReason) return;
+
+    const index = audioIndex;
+    audioIndex += 1;
+
+    pendingAudio.push(
+      synthesize(text, String(userId), { purpose: "prose" })
+        .then((result) => {
+          if (!result) return;
+
+          if (result.refusedReason) {
+            spokenReply.refusedReason = result.refusedReason;
+            progress({ type: "audio-unavailable", reason: result.refusedReason });
+            return;
+          }
+
+          spokenReply.sentences += 1;
+          // Prose never comes back cached — no two replies are alike — so this
+          // is always real spend, unlike the scripture path.
+          spokenReply.charactersSynthesized += result.characters;
+
+          progress({ type: "audio", url: result.url, text, index });
+        })
+        .catch((error: unknown) => {
+          logger.warn(
+            { err: error instanceof Error ? error.message : error },
+            "sentence synthesis failed; the turn continues in text",
+          );
+        }),
+    );
+  };
+
+  const originalOnToken = options.onToken;
+
+  if (spokenReply.requested) {
+    options = {
+      ...options,
+      onToken: (delta: string): void => {
+        originalOnToken?.(delta);
+        for (const sentence of splitter.push(delta)) speakSentence(sentence);
+      },
+    };
+  }
 
   const runReasoning = async (
     extraInstruction?: string,
@@ -742,6 +853,16 @@ async function runTurnInner(
     .filter((ref) => !attempt.citations.some((c) => c.ref === ref))
     .map((ref) => ({ ref, passageId: null }));
 
+  // The last sentence usually has no trailing whitespace to trigger a boundary,
+  // so it is flushed explicitly or her closing line is never spoken.
+  if (spokenReply.requested) {
+    const tail = splitter.flush();
+    if (tail) speakSentence(tail);
+    // Settle before returning: the caller reports what voice cost, and a
+    // promise still in flight is a number that is wrong.
+    await Promise.allSettled(pendingAudio);
+  }
+
   return {
     reply: attempt.reply || GROUNDING_FALLBACK,
     safetyIntercepted: false,
@@ -757,6 +878,7 @@ async function runTurnInner(
     regenerated,
     fellBack,
     citationCapRegenerated,
+    spokenReply,
     reasoningRounds: attempt.rounds,
     roundTimings: attempt.timings,
   };

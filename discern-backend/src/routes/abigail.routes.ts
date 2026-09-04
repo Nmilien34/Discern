@@ -1,6 +1,8 @@
 import express, { Router } from "express";
 import { z } from "zod";
 
+import { env } from "../config/env";
+
 import { asyncHandler } from "../lib/async-handler";
 import { logger } from "../lib/logger";
 import { NotFoundError, ValidationError } from "../lib/errors";
@@ -24,8 +26,41 @@ const startConversationSchema = z
 const sendMessageSchema = z
   .object({
     content: z.string().min(1).max(8000),
+    /**
+     * Ask for her reply to be spoken as well as written.
+     *
+     * A REQUEST, NOT A SWITCH. It is resolved against the deployment flag and
+     * the user's own preference below; asking cannot turn voice on where the
+     * deployment says no.
+     */
+    speakReply: z.boolean().optional(),
   })
   .strict();
+
+/**
+ * Should this person hear her prose on this turn?
+ *
+ * Three gates, and every one can only say no:
+ *
+ *   VOICE_ENABLED   nothing is spoken without it, prose or scripture
+ *   the user        `speakReplies` on their preferences. null defers to the
+ *                   deployment; true or false overrides it — which is what
+ *                   lets a subset of testers hear her while everyone reads
+ *   SPEAK_REPLIES   the deployment default, when the user has no preference
+ *
+ * The request flag is last and can only decline: a client that omits it gets
+ * text, even where everything else is on. Speaking costs money per reply and
+ * never caches, so the default at every layer is silence.
+ */
+function shouldSpeakReply(
+  user: { preferences: { speakReplies: boolean | null } },
+  requested: boolean | undefined,
+): boolean {
+  if (!env.VOICE_ENABLED) return false;
+  if (requested !== true) return false;
+
+  return user.preferences.speakReplies ?? env.SPEAK_REPLIES;
+}
 
 /**
  * POST /v1/abigail/conversations
@@ -88,10 +123,12 @@ abigailRouter.post(
 
     if (!conversation) throw new NotFoundError("No such conversation.");
 
-    const { content } = req.body as { content: string };
+    const body = req.body as { content: string; speakReply?: boolean };
 
-    const result = await runTurn(userId, conversation._id, content);
-    await persistTurn(userId, conversation._id, content, result);
+    const result = await runTurn(userId, conversation._id, body.content, {
+      speakReply: shouldSpeakReply(req.currentUser!, body.speakReply),
+    });
+    await persistTurn(userId, conversation._id, body.content, result);
 
     sendData(res, {
       reply: result.reply,
@@ -132,7 +169,9 @@ abigailRouter.post(
 
     if (!conversation) throw new NotFoundError("No such conversation.");
 
-    const { content } = req.body as { content: string };
+    const body = req.body as { content: string; speakReply?: boolean };
+    const content = body.content;
+    const speakReply = shouldSpeakReply(req.currentUser!, body.speakReply);
 
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-store");
@@ -155,6 +194,7 @@ abigailRouter.post(
 
     try {
       const result = await runTurn(userId, conversation._id, content, {
+        speakReply,
         onProgress: (event) => {
           if (!aborted) send("progress", event);
         },
@@ -171,6 +211,8 @@ abigailRouter.post(
         citations: result.citations.map((c) => c.ref),
         modelUsed: result.modelUsed,
         latencyMs: result.latencyMs,
+        // Kept apart from scripture audio, which is a one-time asset.
+        spokenReply: result.spokenReply,
       });
     } catch (error) {
       // The stream has already been committed with a 200, so a failure cannot

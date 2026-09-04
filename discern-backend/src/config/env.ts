@@ -238,6 +238,21 @@ const envSchema = z.object({
    */
   VOICE_ENABLED: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
 
+  /**
+   * May Abigail's OWN PROSE be spoken? Separate from VOICE_ENABLED, and false.
+   *
+   * VOICE_ENABLED governs scripture, which is a one-time permanent asset: a
+   * passage is synthesized once and every listener after that is free. This
+   * governs her reply, which NEVER caches — no two replies are alike, so every
+   * spoken one is a fresh bill, measured at ~$0.43 against $0.018 for the same
+   * turn in text.
+   *
+   * Two flags because the sensible deployment is scripture spoken and prose
+   * silent, and that has to be expressible. Requires VOICE_ENABLED: there is
+   * no configuration where prose is spoken and scripture is not.
+   */
+  SPEAK_REPLIES: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
+
   // Required only when VOICE_ENABLED is true — enforced below, after parsing,
   // so the error names the flag rather than listing five keys with no reason.
   ELEVENLABS_API_KEY: z.string().min(1).optional(),

@@ -41,13 +41,21 @@ async function bump(
   scope: string,
   kind: SpeechKind,
   amount: number,
+  purpose?: SpeechPurpose,
 ): Promise<number> {
   const field =
     kind === "tts" ? "charactersSynthesized" : "secondsTranscribed";
 
+  // The ceiling counts one number; the REPORT needs two. Both are incremented
+  // in the same write so they cannot disagree.
+  const split =
+    kind === "tts" && purpose
+      ? { [purpose === "prose" ? "proseCharacters" : "scriptureCharacters"]: amount }
+      : {};
+
   const row = await SpeechUsageModel.findOneAndUpdate(
     { scope, day: today() },
-    { $inc: { [field]: amount, requests: 1 } },
+    { $inc: { [field]: amount, requests: 1, ...split } },
     { upsert: true, new: true },
   );
 
@@ -94,11 +102,21 @@ async function refund(
  */
 export type SpendScope = "serving" | "bulk";
 
+/**
+ * WHAT the characters were spent on. Reporting only — both draw on the same
+ * ceiling, because a runaway loop is a runaway loop whatever it is reading.
+ *
+ *   scripture  a passage. Cached permanently, so this is a one-time asset.
+ *   prose      Abigail's own reply. Never cached, so this is recurring.
+ */
+export type SpeechPurpose = "scripture" | "prose";
+
 export async function reserveSpeechSpend(
   userId: string,
   kind: SpeechKind,
   amount: number,
   scope: SpendScope,
+  purpose?: SpeechPurpose,
 ): Promise<SpendDecision> {
   const perUserLimit =
     kind === "tts"
@@ -111,7 +129,7 @@ export async function reserveSpeechSpend(
   if (scope === "bulk") {
     const bulkLimit =
       kind === "tts" ? env.TTS_BULK_DAILY_CHARS : env.STT_BULK_DAILY_SECONDS;
-    const bulkTotal = await bump("bulk", kind, amount);
+    const bulkTotal = await bump("bulk", kind, amount, purpose);
 
     if (bulkTotal > bulkLimit) {
       await refund("bulk", kind, amount);
@@ -151,7 +169,7 @@ export async function reserveSpeechSpend(
   }
 
   const userScope = `user:${userId}`;
-  const userTotal = await bump(userScope, kind, amount);
+  const userTotal = await bump(userScope, kind, amount, purpose);
 
   if (userTotal > perUserLimit) {
     await refund(userScope, kind, amount);
@@ -170,7 +188,7 @@ export async function reserveSpeechSpend(
     };
   }
 
-  const globalTotal = await bump("global", kind, amount);
+  const globalTotal = await bump("global", kind, amount, purpose);
 
   if (globalTotal > globalLimit) {
     await refund("global", kind, amount);
@@ -228,6 +246,8 @@ export function estimateUsd(kind: SpeechKind, amount: number): number {
 export async function speechUsageToday(userId?: string): Promise<{
   scope: string;
   charactersSynthesized: number;
+  scriptureCharacters: number;
+  proseCharacters: number;
   secondsTranscribed: number;
   requests: number;
 }[]> {
@@ -246,6 +266,9 @@ export async function speechUsageToday(userId?: string): Promise<{
     return {
       scope: scope === "global" ? "serving (global)" : scope,
       charactersSynthesized: row?.charactersSynthesized ?? 0,
+      // The two lines that must never be added together in a report.
+      scriptureCharacters: row?.scriptureCharacters ?? 0,
+      proseCharacters: row?.proseCharacters ?? 0,
       secondsTranscribed: row?.secondsTranscribed ?? 0,
       requests: row?.requests ?? 0,
     };

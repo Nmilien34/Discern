@@ -21,8 +21,23 @@ export interface SpeechUsageDocument extends Document {
   scope: string;
   /** UTC "YYYY-MM-DD". A day boundary somebody can reason about. */
   day: string;
-  /** TTS characters submitted. The unit ElevenLabs bills. */
+  /** TTS characters submitted. The unit ElevenLabs bills. Prose + scripture. */
   charactersSynthesized: number;
+  /**
+   * SCRIPTURE and PROSE are counted separately, and this is not bookkeeping
+   * pedantry — they are different kinds of money.
+   *
+   * Scripture is a ONE-TIME PERMANENT ASSET. A passage is synthesized once and
+   * every listener afterwards is free, so its number rises to a ceiling and
+   * stops. Prose is RECURRING AND NEVER CACHES: no two replies are alike, so
+   * every spoken reply is a fresh bill forever.
+   *
+   * Summed into one figure, a grant burn looks healthy right up until the
+   * corpus is done and the only thing still spending is the one that never
+   * stops.
+   */
+  scriptureCharacters: number;
+  proseCharacters: number;
   /** STT seconds submitted. Billed differently, so counted separately. */
   secondsTranscribed: number;
   requests: number;
@@ -35,6 +50,8 @@ const speechUsageSchema = new Schema<SpeechUsageDocument>(
     scope: { type: String, required: true },
     day: { type: String, required: true },
     charactersSynthesized: { type: Number, required: true, default: 0 },
+    scriptureCharacters: { type: Number, required: true, default: 0 },
+    proseCharacters: { type: Number, required: true, default: 0 },
     secondsTranscribed: { type: Number, required: true, default: 0 },
     requests: { type: Number, required: true, default: 0 },
   },

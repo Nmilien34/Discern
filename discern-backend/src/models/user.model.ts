@@ -52,6 +52,18 @@ export interface UserPreferencesDocument {
   timezone: string | null;
   /** Expo/APNs token, or null. Set by the app, cleared when it goes stale. */
   pushToken: string | null;
+  /**
+   * Should Abigail's own prose be spoken to THIS person?
+   *
+   * null means "follow the deployment" (SPEAK_REPLIES). true and false are
+   * explicit overrides, which is what lets a subset of testers hear her while
+   * everyone else reads her — the deployment flag alone is all-or-nothing.
+   *
+   * A user override can only ever be MORE restrictive than the deployment in
+   * one direction: with SPEAK_REPLIES false, true here still enables it, which
+   * is the point. With VOICE_ENABLED false, nothing is spoken regardless.
+   */
+  speakReplies: boolean | null;
   voiceEnabled: boolean;
 }
 
@@ -124,6 +136,7 @@ const preferencesSchema = new Schema<UserPreferencesDocument>(
     notificationTime: { type: String, default: null },
     timezone: { type: String, default: null },
     pushToken: { type: String, default: null },
+    speakReplies: { type: Boolean, default: null },
     voiceEnabled: { type: Boolean, required: true, default: false },
   },
   { _id: false },

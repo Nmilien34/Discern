@@ -93,6 +93,7 @@ export async function passageAudio(
   const result: SynthesisResult | null = await synthesize(text, userId, {
     passageReference: passage.reference,
     translationId: String(translation._id),
+    purpose: "scripture",
   });
 
   if (!result) return null;
