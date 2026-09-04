@@ -103,7 +103,9 @@ const envSchema = z.object({
   /**
    * Which process this is, for the logger's `service` base field.
    *
-   * Render supplies RENDER_SERVICE_NAME and that wins. This exists for local
+   * SET THIS ON RENDER TOO. RENDER_SERVICE_NAME carries the URL-derived slug
+   * rather than the display name, so it cannot be made to match render.yaml.
+   * This is the value that wins, and it exists for local
    * runs, where both entry points would otherwise log as "discern-api" and the
    * worker's output would be indistinguishable from the API's. Set by the
    * start:worker / dev:worker scripts.

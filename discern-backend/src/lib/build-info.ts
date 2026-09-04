@@ -24,7 +24,9 @@ export interface BuildInfo {
 export function buildInfo(fallbackService: string): BuildInfo {
   const commit = env.RENDER_GIT_COMMIT ?? "local";
   return {
-    service: env.RENDER_SERVICE_NAME ?? fallbackService,
+    // Same precedence as the logger: what we set beats the platform's
+    // URL-derived slug, so /healthz reports the name in render.yaml.
+    service: env.SERVICE_NAME ?? env.RENDER_SERVICE_NAME ?? fallbackService,
     commit,
     commitShort: commit === "local" ? "local" : commit.slice(0, 7),
     startedAt: STARTED_AT,
