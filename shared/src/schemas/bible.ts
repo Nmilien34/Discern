@@ -143,6 +143,30 @@ export const passageResponseSchema = z
     endVerse: z.number().int().positive(),
     /** Chapter of the last verse, when a passage crosses a chapter boundary. */
     endChapter: z.number().int().positive(),
+    /**
+     * WHERE THE SPEECH GOES ON, when this passage opens a quotation it does not
+     * close. Null in every other case, which is most of them.
+     *
+     * The corpus segments on narrative seams, so a citation often ends inside a
+     * speech: 951 of 4,090 stored pericopes in WEB carry an unmatched opening
+     * mark. Two bad answers were considered and rejected. DELETING the mark
+     * turns "God said to Noah, “I will bring an end to all flesh" into
+     * narration. ADDING a closing mark invents punctuation asserting the speech
+     * ended where our segmenter happened to cut, and it did not.
+     *
+     * So the text is not touched at all and the typography problem becomes
+     * navigation: the block keeps its mark and the reader is told, truthfully,
+     * which passage the speech continues into.
+     *
+     * NOT ON `chapterResponseSchema`. The Bible reader shows whole chapters,
+     * where the marks balance, and the rule has held since the beginning: the
+     * reader never gets any of this treatment. Its absence there is structural
+     * rather than a flag someone can turn on.
+     *
+     * TRANSLATION-DEPENDENT, and correctly so. KJV uses no quotation marks at
+     * all, so a KJV reader never sees this and never needs to.
+     */
+    continuesIn: z.string().nullable(),
     translation: translationSchema,
     text: z.string(),
     verses: z.array(verseSchema),
@@ -164,3 +188,35 @@ export const authorsListResponseSchema = z
   .strict();
 
 export type AuthorsListResponse = z.infer<typeof authorsListResponseSchema>;
+
+/**
+ * GET /v1/bible/books — the table of contents.
+ *
+ * ONE call serves both navigations the app offers: book-first in canonical
+ * order, and author-first, because every row carries its author link.
+ *
+ * `author` is NULL where nobody knows who wrote it. That is a fact about the
+ * text, not missing data, and the app renders it as unknown rather than hiding
+ * the book — the same reason `attribution` is a first-class field above.
+ */
+export const bookSummarySchema = z
+  .object({
+    slug: z.string(),
+    name: z.string(),
+    testament: z.enum(TESTAMENTS),
+    canonicalOrder: z.number().int(),
+    chapterCount: z.number().int(),
+    author: z
+      .object({ slug: z.string(), name: z.string(), era: z.string() })
+      .strict()
+      .nullable(),
+  })
+  .strict();
+
+export type BookSummary = z.infer<typeof bookSummarySchema>;
+
+export const booksListResponseSchema = z
+  .object({ books: z.array(bookSummarySchema) })
+  .strict();
+
+export type BooksListResponse = z.infer<typeof booksListResponseSchema>;

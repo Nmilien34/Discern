@@ -61,12 +61,48 @@ export const STAGE_SLUGS = [
   "sloth-diligence",
 ] as const;
 
+/**
+ * The worker's job types.
+ *
+ * Here rather than in the backend's job model because the job-health contract
+ * has to enumerate them: a job that has never run must come back as a present
+ * row saying so, and it can only do that if the API and the client agree on the
+ * full list independently of what the `jobs` collection happens to contain.
+ */
+/**
+ * Why a read exists. The mix is the point: every other app in this category
+ * ships inspiring examples only, and FAILURE — someone who missed the virtue,
+ * and what they could have done — is the type that makes the path ours.
+ */
+export const READ_TYPES = ["teaching", "failure", "example"] as const;
+
+export type ReadType = (typeof READ_TYPES)[number];
+
+export const JOB_TYPES = [
+  "embedding-backfill",
+  "tts-pregenerate",
+  "memory-summarize",
+  "notification-schedule",
+  "notification-send",
+] as const;
+
+export type JobType = (typeof JOB_TYPES)[number];
+
 /** ARCHITECTURE.md §6, seedEvents.type. */
 export const SEED_EVENT_TYPES = [
   "dwell_time",
   "revisit",
   "conversation_depth",
   "premise_reframed",
+  /**
+   * ADDED 2026-09-06, when humility's nine reads were finished and it became
+   * plain that reading four thousand words earned nothing at all.
+   *
+   * Deliberately the SMALLEST weight in the ledger: finishing a whole virtue
+   * must stay worth less than one thing done in real life. See
+   * config/seed-growth.ts for the arithmetic.
+   */
+  "read_completed",
   "action_taken",
   "stage_movement",
 ] as const;
@@ -90,3 +126,47 @@ export const GROWTH_STAGES = [
 export const CARRYING_KINDS = ["passage", "hymn"] as const;
 export const CARRYING_SOURCES = ["abigail", "self"] as const;
 export const STAGE_ENTERED_BY = ["abigail", "user"] as const;
+
+/**
+ * What was on screen when a journal entry was started.
+ *
+ * PROVENANCE, NOT A CATEGORY — round 13 was explicit that the journal has no
+ * mood selector and no tags. This records what the person was looking at when
+ * they opened the compose screen, which is the second chip on that screen, and
+ * it is the only classification the journal has.
+ */
+export const JOURNAL_ORIGINS = ["journal", "prayer", "read", "carrying"] as const;
+
+export type JournalOrigin = (typeof JOURNAL_ORIGINS)[number];
+
+export type StageEnteredBy = (typeof STAGE_ENTERED_BY)[number];
+
+/**
+ * Every `error.code` the API can send. CONVENTIONS.md §3.
+ *
+ * The app branches on THESE, never on message text. A message is copy and gets
+ * rewritten; a code is the contract. Mirrors `lib/errors.ts` exactly — the two
+ * 503s are separate values on purpose, because only one of them means "retry":
+ *
+ *   paymentRequired    402. A positive no. Show the paywall.
+ *   accessUnavailable  503. We cannot TELL. Retry. NEVER a paywall.
+ *
+ * Collapsing those two locks a paying subscriber out of the whole product
+ * during a provider outage, which with no free tier is the entire app.
+ */
+export const ERROR_CODES = {
+  validation: "validation_error",
+  unauthorized: "unauthorized",
+  forbidden: "forbidden",
+  notFound: "not_found",
+  paymentRequired: "payment_required",
+  conflict: "conflict",
+  rateLimited: "rate_limited",
+  upstreamUnavailable: "upstream_unavailable",
+  accessUnavailable: "access_unavailable",
+  reasoningBudgetExhausted: "reasoning_budget_exhausted",
+  internal: "internal_error",
+  notImplemented: "not_implemented",
+} as const;
+
+export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];

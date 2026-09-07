@@ -5,7 +5,8 @@
   "description": "Discern \u2014 scripture, discernment, and a cultivation path",
   "workspaces": [
     "shared",
-    "discern-backend"
+    "discern-backend",
+    "discern-frontend"
   ],
   "scripts": {
     "predev": "npm run build -w @discern/shared",

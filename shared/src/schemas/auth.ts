@@ -74,6 +74,45 @@ export const entitlementSchema = z
 
 export type Entitlement = z.infer<typeof entitlementSchema>;
 
+/**
+ * One completed onboarding step, as the API returns it.
+ *
+ * ADDED 2026-09-04, AT THE PHASE 9 GATE, BECAUSE IT WAS MISSING AND THAT WAS A
+ * REAL BREAK. `meResponseSchema` is strict and did not declare `onboarding` or
+ * three of the six preference fields the route has been sending since Phase 8,
+ * so the first client to parse GET /v1/me against this contract would have
+ * thrown on a perfectly healthy response. The contract existing is not the same
+ * as the contract being right; nothing was checking it against the route.
+ */
+export const onboardingStepRecordSchema = z
+  .object({ step: z.string(), completedAt: z.string() })
+  .strict();
+
+export type OnboardingStepRecord = z.infer<typeof onboardingStepRecordSchema>;
+
+/**
+ * What the reader has chosen. Every field is nullable-or-default because every
+ * one of them is a decision nobody has made yet on first launch.
+ *
+ * `pushRegistered` is a BOOLEAN, not the token: the app never needs the token
+ * back and sending it would be handing a credential to every client that asks
+ * for its own profile.
+ */
+export const userPreferencesSchema = z
+  .object({
+    translationId: z.string().nullable(),
+    /** "HH:MM" in `timezone`. NULL MEANS NEVER, and null is the shipped state. */
+    notificationTime: z.string().nullable(),
+    timezone: z.string().nullable(),
+    pushRegistered: z.boolean(),
+    /** null defers to the deployment's SPEAK_REPLIES. */
+    speakReplies: z.boolean().nullable(),
+    voiceEnabled: z.boolean(),
+  })
+  .strict();
+
+export type UserPreferences = z.infer<typeof userPreferencesSchema>;
+
 export const authResponseSchema = z
   .object({
     token: z.string(),
@@ -112,13 +151,15 @@ export const meResponseSchema = z
     lastActiveAt: z.string(),
     entitlement: entitlementSchema,
     currentStageSlug: z.string().nullable(),
-    preferences: z
-      .object({
-        translationId: z.string().nullable(),
-        notificationTime: z.string().nullable(),
-        voiceEnabled: z.boolean(),
-      })
-      .strict(),
+    /**
+     * The steps this person has already been through.
+     *
+     * Sent so a reinstall re-runs only what is NEW rather than the whole flow —
+     * which is the reason onboarding is recorded as step identifiers and not as
+     * a boolean (see onboardingStepSchema).
+     */
+    onboarding: z.array(onboardingStepRecordSchema),
+    preferences: userPreferencesSchema,
     /**
      * Whether access is live, and whether a paywall is the right thing to show.
      *
@@ -197,3 +238,93 @@ export const onboardingStepSchema = z
   .strict();
 
 export type OnboardingStepRequest = z.infer<typeof onboardingStepSchema>;
+
+/**
+ * PUT /v1/me/notifications, response.
+ *
+ * `willNotify` is said back EXPLICITLY rather than left for the client to infer
+ * from the other two, because the inference is exactly the mistake this route
+ * is shaped to prevent: registering a push token subscribes nobody to anything,
+ * and a client that assumes it did will tell someone they have a reminder set
+ * when they have not.
+ */
+export const notificationPreferencesResponseSchema = z
+  .object({
+    pushRegistered: z.boolean(),
+    notificationTime: z.string().nullable(),
+    timezone: z.string().nullable(),
+    willNotify: z.boolean(),
+    speakReplies: z.boolean().nullable(),
+  })
+  .strict();
+
+export type NotificationPreferencesResponse = z.infer<
+  typeof notificationPreferencesResponseSchema
+>;
+
+/** POST /v1/me/onboarding, response — the full set, not just the new step. */
+/* ── ACCOUNT DELETION ──────────────────────────────────────────────────────
+ *
+ * RE-AUTHENTICATION IS REQUIRED, and a valid session token is not it. A phone
+ * left unlocked on a table already carries a valid session; the destructive
+ * action needs proof that the person is present right now.
+ *
+ * Which proof depends on what the account is:
+ *   linked     the provider's signed token again, whose subject must match the
+ *              account already on file
+ *   anonymous  the device id, because there is no provider to assert against
+ *              and holding the device is the strongest claim available
+ *
+ * Anonymous deletion has to work. Someone who purchased before signing up and
+ * never finished has real data under an anonymous id, and telling them to
+ * create an account before they can delete one is absurd.
+ */
+export const deleteAccountRequestSchema = z
+  .union([
+    z
+      .object({
+        confirm: z.literal("DELETE"),
+        provider: z.enum(LINK_PROVIDERS),
+        identityToken: z.string().min(1).max(8192),
+        nonce: z.string().min(1).max(512),
+      })
+      .strict(),
+    z
+      .object({
+        confirm: z.literal("DELETE"),
+        deviceId: z.string().min(8).max(200),
+      })
+      .strict(),
+  ]);
+
+export type DeleteAccountRequest = z.infer<typeof deleteAccountRequestSchema>;
+
+export const deleteAccountResponseSchema = z
+  .object({
+    deletedAt: z.string(),
+    /** label -> rows removed or anonymised, from the registry walk. */
+    removed: z.record(z.string(), z.number().int().nonnegative()),
+    /** What was anonymised rather than deleted, and why, in plain words. */
+    retained: z.array(
+      z.object({ collection: z.string(), reason: z.string() }).strict(),
+    ),
+    /**
+     * ALWAYS TRUE, and it is here so the client cannot forget it.
+     *
+     * Deleting the account does NOT cancel the subscription. Apple owns the
+     * subscription; we own the account. Somebody who deletes expecting billing
+     * to stop gets charged again, asks for a refund, and leaves one star — so
+     * the flow offers cancellation FIRST and this field is the contract's
+     * reminder that the two are separate systems.
+     */
+    subscriptionUnaffected: z.literal(true),
+  })
+  .strict();
+
+export type DeleteAccountResponse = z.infer<typeof deleteAccountResponseSchema>;
+
+export const onboardingResponseSchema = z
+  .object({ completed: z.array(onboardingStepRecordSchema) })
+  .strict();
+
+export type OnboardingResponse = z.infer<typeof onboardingResponseSchema>;

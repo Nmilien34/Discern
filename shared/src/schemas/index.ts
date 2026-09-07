@@ -8,9 +8,13 @@ import { z } from "zod";
 
 import { HEALTH_STATUSES } from "../constants";
 
+export * from "./abigail";
 export * from "./auth";
 export * from "./bible";
+export * from "./billing";
+export * from "./journal";
 export * from "./journey";
+export * from "./ops";
 
 /**
  * GET /healthz.
