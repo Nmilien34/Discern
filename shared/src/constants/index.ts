@@ -135,6 +135,55 @@ export const STAGE_ENTERED_BY = ["abigail", "user"] as const;
  * they opened the compose screen, which is the second chip on that screen, and
  * it is the only classification the journal has.
  */
+/**
+ * THE TEN ONBOARDING ASKS, as closed sets where the design offers options.
+ *
+ * Screens 3, 9 and 10 are free text and have no enum: a name, what is going on,
+ * and who is involved. The rest are pick-one or pick-many, and the values below
+ * are the options the canvas actually draws — not a superset invented here.
+ *
+ * Stored as SLUGS rather than as the copy. The copy on screen 4 is a full
+ * sentence ("Something happened and I can't stop thinking about it"), and
+ * storing sentences means a wording change silently invalidates every stored
+ * answer.
+ */
+
+/** Screen 4. One option is deliberately not a crisis. */
+export const ONBOARDING_BROUGHT = [
+  "cant-stop-thinking",
+  "keep-doing-it",
+  "want-to-read",
+  "dont-know",
+] as const;
+
+export type OnboardingBrought = (typeof ONBOARDING_BROUGHT)[number];
+
+/** Screen 12 — how much she explains before she quotes. Her job, not their knowledge. */
+export const ONBOARDING_FAMILIARITY = [
+  "a-line-of-context",
+  "assume-i-know",
+  "explain-like-im-new",
+] as const;
+
+export type OnboardingFamiliarity = (typeof ONBOARDING_FAMILIARITY)[number];
+
+/** Screen 14. Shapes what is offered, never what is allowed. */
+export const ONBOARDING_TIME_AVAILABLE = [
+  "a-few-minutes",
+  "about-twenty",
+  "an-hour-or-more",
+] as const;
+
+export type OnboardingTimeAvailable = (typeof ONBOARDING_TIME_AVAILABLE)[number];
+
+/**
+ * Reader type size. Round 14: the reader is the most-used screen and people's
+ * eyes differ.
+ */
+export const TYPE_SIZES = ["small", "medium", "large", "x-large"] as const;
+
+export type TypeSize = (typeof TYPE_SIZES)[number];
+
 export const JOURNAL_ORIGINS = ["journal", "prayer", "read", "carrying"] as const;
 
 export type JournalOrigin = (typeof JOURNAL_ORIGINS)[number];

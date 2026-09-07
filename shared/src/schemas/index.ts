@@ -14,6 +14,7 @@ export * from "./bible";
 export * from "./billing";
 export * from "./journal";
 export * from "./journey";
+export * from "./memory";
 export * from "./ops";
 
 /**

@@ -2,7 +2,16 @@
 
 import { z } from "zod";
 
-import { ENTITLEMENT_STATUSES, LINK_PROVIDERS } from "../constants";
+import {
+  ENTITLEMENT_STATUSES,
+  GROWTH_STAGES,
+  LINK_PROVIDERS,
+  ONBOARDING_BROUGHT,
+  ONBOARDING_FAMILIARITY,
+  ONBOARDING_TIME_AVAILABLE,
+  STAGE_SLUGS,
+  TYPE_SIZES,
+} from "../constants";
 
 /**
  * POST /v1/auth/device
@@ -75,6 +84,59 @@ export const entitlementSchema = z
 export type Entitlement = z.infer<typeof entitlementSchema>;
 
 /**
+ * WHAT SOMEONE SAID DURING ONBOARDING.
+ *
+ * ── THESE ARE PRODUCT DATA. THEY ARE NOT JOURNAL DATA. ──────────────────────
+ *
+ * The next person to read this will reasonably wonder, because both are things
+ * a person typed about themselves and one of them never leaves. So, explicitly:
+ *
+ *   The JOURNAL is what someone writes for themselves. It never reaches
+ *   Abigail — not summarised, not retrieved, not referenced, not embedded — and
+ *   that is enforced by a lint rule, a models barrel that will not export it,
+ *   and a test written before the feature.
+ *
+ *   ONBOARDING ANSWERS are what someone told the product in order to be given
+ *   the right thing. They MAY inform the path, the starting virtue, and
+ *   Abigail's context — that is what they are for, and screen 9 says so out
+ *   loud: "She will have it when you talk."
+ *
+ * The journal's rules do not extend here and were never meant to. What DOES
+ * extend is that these are sensitive: round 15 ruled the vice selection
+ * sensitive, so it is listed under "what she remembers", it is deletable there,
+ * and it goes in the privacy policy.
+ *
+ * EVERY FIELD IS OPTIONAL because answers accumulate. Someone who quits at
+ * screen 9 and comes back does not start over, so each screen writes what it
+ * has and nothing waits for the end.
+ */
+export const onboardingAnswersSchema = z
+  .object({
+    /** Screen 3. The highest-value field here: Home's greeting and the wall. */
+    name: z.string().min(1).max(80).nullable().optional(),
+    /** Screen 4. */
+    brought: z.enum(ONBOARDING_BROUGHT).nullable().optional(),
+    /**
+     * Screen 6, pick any. STAGE SLUGS, not vice words, because that is what
+     * `resolveStartingStage()` already takes.
+     */
+    vices: z.array(z.enum(STAGE_SLUGS)).max(7).optional(),
+    /** Screen 7, asked only when more than one was chosen. */
+    firstVice: z.enum(STAGE_SLUGS).nullable().optional(),
+    /** Screen 9. Free text, optional, and visibly so. */
+    situation: z.string().max(4000).nullable().optional(),
+    /** Screen 10. A first name, or whatever they call them. */
+    person: z.string().max(120).nullable().optional(),
+    /** Screen 12. */
+    familiarity: z.enum(ONBOARDING_FAMILIARITY).nullable().optional(),
+    /** Screen 14. */
+    timeAvailable: z.enum(ONBOARDING_TIME_AVAILABLE).nullable().optional(),
+  })
+  .strict();
+
+export type OnboardingAnswers = z.infer<typeof onboardingAnswersSchema>;
+
+/**
  * One completed onboarding step, as the API returns it.
  *
  * ADDED 2026-09-04, AT THE PHASE 9 GATE, BECAUSE IT WAS MISSING AND THAT WAS A
@@ -108,6 +170,11 @@ export const userPreferencesSchema = z
     /** null defers to the deployment's SPEAK_REPLIES. */
     speakReplies: z.boolean().nullable(),
     voiceEnabled: z.boolean(),
+    /**
+     * Reader type size. Round 14: the reader is the most-used screen and
+     * people's eyes differ. Settings writes it; nothing else reads it yet.
+     */
+    typeSize: z.enum(TYPE_SIZES),
   })
   .strict();
 
@@ -147,10 +214,29 @@ export const meResponseSchema = z
     /** Null while the account is still anonymous. */
     accountId: z.string().nullable(),
     email: z.string().nullable(),
+    /**
+     * What she calls them. Asked on onboarding screen 3 — "participating by
+     * screen three" — and rendered by Home's greeting and the paywall.
+     */
+    name: z.string().nullable(),
     createdAt: z.string(),
     lastActiveAt: z.string(),
     entitlement: entitlementSchema,
     currentStageSlug: z.string().nullable(),
+    /**
+     * The tree's stage, and its label, ON THE IDENTITY RESPONSE.
+     *
+     * Settings opens with the glyph and "Sapling, at the fourth of six", and
+     * Settings is the screen with RESTORE PURCHASES on it — so the person most
+     * likely to open it is a lapsed subscriber, who by definition cannot call
+     * the entitlement-gated `GET /v1/journey/seed`. Two strings here rather
+     * than a 402 on the header of the screen someone opened to resubscribe.
+     *
+     * Points, the ledger and the contributions stay behind the wall. This is
+     * the minimum that makes the screen renderable, not the seed in miniature.
+     */
+    growthStage: z.enum(GROWTH_STAGES),
+    growthStageLabel: z.string(),
     /**
      * The steps this person has already been through.
      *
@@ -159,6 +245,14 @@ export const meResponseSchema = z
      * a boolean (see onboardingStepSchema).
      */
     onboarding: z.array(onboardingStepRecordSchema),
+    /**
+     * What they said during onboarding. Empty until they answer something.
+     *
+     * On the identity response rather than behind the entitlement gate,
+     * because the greeting and the paywall line both need the name and both
+     * happen before anybody has paid.
+     */
+    onboardingAnswers: onboardingAnswersSchema,
     preferences: userPreferencesSchema,
     /**
      * Whether access is live, and whether a paywall is the right thing to show.
@@ -229,6 +323,18 @@ export type NotificationPreferencesRequest = z.infer<
  */
 export const onboardingStepSchema = z
   .object({
+    /**
+     * WHAT THEY SAID ON THIS SCREEN, if anything.
+     *
+     * Sent alongside the step so one call per screen records both "they got
+     * here" and "here is the answer". That is what makes resume work: someone
+     * who quits at screen 9 has nine screens of answers stored, not zero, and
+     * nothing waits for a final submit that may never come.
+     *
+     * Merged into what is already there, never replacing it — a later screen
+     * cannot clear an earlier answer by omitting it.
+     */
+    answers: onboardingAnswersSchema.optional(),
     step: z
       .string()
       .min(1)
@@ -324,7 +430,46 @@ export const deleteAccountResponseSchema = z
 export type DeleteAccountResponse = z.infer<typeof deleteAccountResponseSchema>;
 
 export const onboardingResponseSchema = z
-  .object({ completed: z.array(onboardingStepRecordSchema) })
+  .object({
+    completed: z.array(onboardingStepRecordSchema),
+    /**
+     * Everything stored so far, said back.
+     *
+     * So a client resuming at screen 9 can render what it already has rather
+     * than asking again, and so a write is confirmable without a second round
+     * trip to `GET /v1/me`.
+     */
+    answers: onboardingAnswersSchema,
+  })
   .strict();
 
 export type OnboardingResponse = z.infer<typeof onboardingResponseSchema>;
+
+
+/**
+ * PATCH /v1/me/preferences.
+ *
+ * Settings and onboarding screen 13 write the same fields, so they share one
+ * endpoint. `PUT /v1/me/notifications` stays separate: a push token and a
+ * chosen time are a different decision with a different failure mode, and
+ * merging them would mean a translation change could clear a push token.
+ */
+export const updatePreferencesRequestSchema = z
+  .object({
+    translationId: z.string().min(1).max(64).optional(),
+    typeSize: z.enum(TYPE_SIZES).optional(),
+    voiceEnabled: z.boolean().optional(),
+    speakReplies: z.boolean().optional(),
+  })
+  .strict()
+  .refine((v) => Object.keys(v).length > 0, {
+    message: "at least one preference must be given",
+  });
+
+export type UpdatePreferencesRequest = z.infer<typeof updatePreferencesRequestSchema>;
+
+export const preferencesResponseSchema = z
+  .object({ preferences: userPreferencesSchema })
+  .strict();
+
+export type PreferencesResponse = z.infer<typeof preferencesResponseSchema>;
