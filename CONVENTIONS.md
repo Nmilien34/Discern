@@ -408,6 +408,53 @@ which is what makes Render run it as a background worker.
 
 ---
 
+## 9a. Deploying, and the one rule that came out of doing it wrong
+
+### A migration a rollback cannot survive waits for the code
+
+**Migrations that a rollback cannot survive do not get applied until the code
+that needs them is on `main` and deployed.**
+
+This is written down because we got it the other way round on 2026-09-07. A
+unique partial index on `seedEvents` was added to production while the code that
+understood it was still on a laptop. The index was CORRECT. Applying it early
+was not.
+
+The deployed build wrote `stage_movement` rows with `sourceId: null`, so the
+first such write per user succeeded and every one after it raised E11000 —
+swallowed, because a failed ledger write must not fail a user's action. The
+ledger under-counted silently for fourteen hours, and the users it would have
+hit were precisely the engaged ones, the ones who entered a second virtue.
+
+Nothing was lost, by luck rather than by design: no stage entry happened in that
+window. What the episode actually cost was optionality. From the moment the
+index landed, rolling back stopped being free — and a rollback is a deploy too.
+
+So the ordering is: code on `main`, code deployed, then the migration. If a
+migration must go first, the window is a known cost that gets stated out loud
+before it opens, not discovered afterwards.
+
+### Deploy the worker too
+
+`discern-api` and `discern-worker` build from one commit and **deploy
+independently**. On 2026-09-07 a push deployed the API and not the worker: the
+API served `7832525` while the worker stayed on `63cd9fb`, and it was found only
+because the new worker writes a `jobRun` per completion and `jobruns` was empty
+while jobs kept finishing.
+
+Until the auto-deploy trigger on the worker is understood, **treat "deploy the
+worker too" as a manual chore on every deploy**, and check it rather than
+assuming it:
+
+```
+jobruns rows written after the deploy timestamp > 0
+```
+
+`autoDeploy: true` is declared for both services in `render.yaml`, which proves
+nothing — see the header of that file. It is documentation, not an instrument.
+
+---
+
 ## 10. Departures from the references, for review
 
 Five departures were raised at the Phase 0 gate. **Two were reversed** by spec amendment at
