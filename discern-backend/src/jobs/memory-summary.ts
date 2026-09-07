@@ -84,11 +84,13 @@ export async function summarizeYesterday(userId: string): Promise<number> {
     userId,
     startedAt: { $gte: since },
   })
-    .sort({ startedAt: -1 })
     .select("_id")
     .lean();
 
   if (conversations.length === 0) return 0;
+
+  // Only when there is no ambiguity. See the note at the `.map` below.
+  const conversationId = conversations.length === 1 ? conversations[0]!._id : null;
 
   const messages = await MessageModel.find({
     conversationId: { $in: conversations.map((c) => c._id) },
@@ -131,21 +133,30 @@ export async function summarizeYesterday(userId: string): Promise<number> {
       .map((t) => t.trim())
       .filter((t) => t.length > 0)
       .slice(0, MAX_OPEN_THREADS)
-      // THE WAY BACK IN, attributed to the MOST RECENT conversation in the
-      // window.
+      // THE WAY BACK IN, ATTRIBUTED ONLY WHEN IT IS CERTAIN.
+      //
+      // ── DO NOT "IMPROVE" THIS BACK INTO A GUESS. ────────────────────────
       //
       // The summariser is given one transcript spanning up to 36 hours and
-      // returns a flat list of strings, so it does not say which conversation
-      // each thread came out of. The most recent one is the best single answer
-      // available without changing what she is asked to produce, and it is
-      // right whenever there was one conversation — which is the common case.
+      // returns a flat list of strings. It does not say which conversation each
+      // thread came out of, so when the window holds more than one conversation
+      // there is no way to know, and the obvious shortcut — attribute
+      // everything to the most recent one — is wrong in a way nobody can see.
       //
-      // IT CAN BE WRONG when someone talked twice in a day about different
-      // things. The honest version is per-thread attribution, which means
-      // marking conversations in the transcript and asking the summariser to
-      // return an id alongside each thread. That is a change to her prompt and
-      // therefore a separate decision, not a detail to slip in here.
-      .map((text) => ({ text, at: new Date(), conversationId: conversations[0]!._id }));
+      // The failure it produces is bad. Somebody taps *Continue with Abigail*
+      // expecting the thing they left open and lands in an unrelated
+      // conversation, with no signal that anything went wrong. A wrong door is
+      // worse than no door, because a wrong door is trusted.
+      //
+      // So: exactly one conversation in the window, or null. Null already has a
+      // rendering path — it is what every thread written before 2026-09-07 gets
+      // — and it shows the text with no way in, which is honest.
+      //
+      // THE REAL FIX is per-thread attribution: mark conversations in the
+      // transcript and have the summariser return an id alongside each thread.
+      // That is a change to what she is asked to produce, so it is a separate
+      // decision with its own evaluation, not a detail to slip in here.
+      .map((text) => ({ text, at: new Date(), conversationId }));
 
     // REPLACE, not append. Re-running produces the same memory, and yesterday's
     // threads do not pile up into a list nobody reads.

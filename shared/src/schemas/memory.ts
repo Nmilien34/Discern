@@ -16,12 +16,22 @@ import { z } from "zod";
  * precedented eleven lines away in the same model — `MemoryPassageGiven` has
  * carried one since it was written — it simply was never added to threads.
  *
- * NULLABLE, and honestly so. Threads written before 2026-09-07 have no
- * conversation recorded and are NOT backfilled: the nightly job replaces
- * `openThreads` wholesale rather than appending, so every one of them is
- * rewritten within a day and a backfill would be guesswork with a shelf life of
- * hours. Until then a thread comes back with `conversationId: null` and the
- * client renders it as text without a way in, which is what it honestly is.
+ * NULLABLE, AND NULL IS A NORMAL ANSWER, not only a legacy one. Two ways it
+ * happens:
+ *
+ *   1. The thread predates the field. Not backfilled — the nightly job replaces
+ *      `openThreads` wholesale rather than appending, so every old thread is
+ *      rewritten within a day and a backfill would be guesswork with a shelf
+ *      life of hours.
+ *   2. MORE THAN ONE CONVERSATION fell in the summariser's 36-hour window. It
+ *      returns a flat list of strings and does not say which thread came from
+ *      which, so attribution is STRICT: exactly one conversation, or null. The
+ *      shortcut — attribute everything to the most recent — is wrong invisibly,
+ *      and a wrong door is worse than no door because a wrong door is trusted.
+ *
+ * Either way the client shows the text with no way in, which is honest. Design
+ * the row so that state is not an error case: it will be common for anyone who
+ * talks to her more than once in a day.
  */
 export const memoryThreadSchema = z
   .object({
