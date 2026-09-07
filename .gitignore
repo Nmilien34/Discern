@@ -51,3 +51,6 @@ worktrees/
 # are lost. Back them up somewhere that is not this machine and not this repo.
 # See discern-backend/src/config/prompts.ts.
 /prompts/
+
+# Local editor/agent scratch. Not part of the build.
+.claude/
