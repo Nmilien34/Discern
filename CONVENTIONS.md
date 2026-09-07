@@ -430,6 +430,49 @@ the Phase 1 gate; three stand as built.
 5. **Model IDs as config** (§2). Neither reference has it; Discern's four-tier routing
    requires swapping any tier without a code change. **Confirmed.**
 
+### Phase 9 departures (frontend)
+
+Three, raised at the Phase 9 gate.
+
+6. **The auth token lives in the KEYCHAIN, not AsyncStorage.** Both references
+   keep theirs in AsyncStorage — on iOS an unencrypted file in the app
+   container. That is defensible for them and not here: Discern's device id IS
+   the account (`ARCHITECTURE.md` §10 decision 2), so whoever holds it holds
+   every conversation, every carrying, and the stage Abigail named, and there is
+   no password behind it to re-challenge with. `expo-secure-store`, both keys.
+   See `discern-frontend/src/services/storage.ts`.
+7. **No AccessContext cache through an outage.** Pepta caches a bounded access
+   decision so a healthy subscriber survives a provider outage offline. Discern
+   has no local entitlement store to cache from until RevenueCat's client SDK
+   lands, so the scaffold asks the server, keeps three states, and retries.
+   Revisit with the StoreKit work — the three-state model is already the right
+   shape to hang a cache on.
+8. **Metro is configured for the monorepo; hierarchical lookup stays ON.**
+   Expo's standard monorepo recipe sets `disableHierarchicalLookup` to force
+   isolated resolution. This repo hoists — `zod` sits in the ROOT
+   `node_modules`, not inside `shared/` — so disabling the upward walk is
+   exactly what breaks `@discern/shared`. `watchFolders` and
+   `nodeModulesPaths` only. See `discern-frontend/metro.config.js`.
+
+## The app and the API can only agree if something CHECKS
+
+`@discern/shared` exists so the app and the API cannot disagree about a shape.
+On 2026-09-04, at the Phase 9 gate, it was not doing that job.
+
+`meResponseSchema` — the one contract every screen needs — did not describe what
+`GET /v1/me` had been sending since Phase 8. It is `.strict()`, and the live
+response carried `onboarding` plus three preference fields the schema did not
+declare, so the first client to parse a perfectly healthy `/v1/me` against the
+shared contract would have thrown. Meanwhile the conversation, stream, books,
+products and audio shapes had no contract at all and were only in the route
+files.
+
+**A contract nothing parses is a comment.** The route was right, the schema was
+wrong, and nothing anywhere compared them. What was added at Phase 9 — the
+missing schemas, and the correction — was verified by parsing LIVE responses
+from the deployed API against each one. That is the bar for anything added here
+later: not "the shape looks right", but "a real response parsed against it".
+
 ### Gitignore
 
 Union of both references' patterns: `node_modules/`, `dist/`, `.expo/`, `.env`, `.env.*`

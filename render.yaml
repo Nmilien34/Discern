@@ -1,3 +1,31 @@
+# ⚠ THIS FILE IS DOCUMENTATION, NOT AN INSTRUMENT. NOTHING HERE IS APPLIED.
+#
+# Established 2026-09-07 by auditing what actually reaches the running
+# processes. Fourteen of the twenty-six variables declared below are present in
+# production, and EVERY ONE OF THEM ARRIVES FROM THE RENDER DASHBOARD OR FROM
+# THE PLATFORM. Not one arrives because this file says so.
+#
+# The Blueprint has never been applied. The evidence, if you want to re-check
+# it: `NODE_ENV: production` is declared twice below and the API logs
+# `nodeEnv: "development"` at startup; the six ELEVENLABS_* identity values are
+# declared below and all six are running on the code's defaults.
+#
+# SO DO NOT REASON FROM THIS FILE ABOUT WHAT IS SET. We did exactly that about
+# APPLE_BUNDLE_ID — read `sync: false` as "deliberately dashboard-managed" when
+# it was simply unset, and the line declaring it was doing nothing at all. Check
+# the dashboard, or check behaviour.
+#
+# `sync: false` in particular means nothing today. It is an instruction to a
+# Blueprint sync that has never run.
+#
+# APPLYING IT PROPERLY IS ITS OWN DECISION, and a large one: a sync writes every
+# value here at once and removes anything dashboard-set that this file does not
+# declare — which today includes SERVICE_NAME (absent here, and without it the
+# logs lose their name and report the URL slug instead) and TEST_CLIENT_ENABLED.
+# Add SERVICE_NAME first, decide about the test client, then sync.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+#
 # Two services from one repo: the API and the background worker.
 #
 # They build from the same commit but deploy INDEPENDENTLY. Corner's two drifted
@@ -46,6 +74,25 @@ envVarGroups:
         sync: false
       - key: JWT_SECRET
         sync: false
+      # Operator secret for GET /v1/ops/jobs. UNSET MEANS THE ENDPOINT IS NOT
+      # MOUNTED — absence is a closed door, not an open one. It lived on
+      # `requireAuth` until 2026-09-06, which is not a gate here: POST
+      # /v1/auth/device mints a token from any device id with no credential, and
+      # two job results carry a userId. Generate with: openssl rand -hex 32
+      - key: OPS_TOKEN
+        sync: false
+      # SIGN IN WITH APPLE FAILS CLOSED WITHOUT THIS, and it has never been set.
+      #
+      # It is the `aud` claim an Apple identity token is verified against.
+      # identity-verification.ts refuses to run rather than skip the audience
+      # check, because a real Apple token issued to ANY other app would
+      # otherwise be accepted as an identity here — so the failure is correct
+      # and it is also total: POST /v1/auth/link cannot succeed.
+      #
+      # Sign-up happens AFTER purchase (onboarding screen 19), so this sits
+      # between a paying customer and a working account. Value: com.boltzman.discern
+      - key: APPLE_BUNDLE_ID
+        sync: false
 
 services:
   - type: web
@@ -81,6 +128,41 @@ services:
         value: us-east-1
       - key: S3_BUCKET
         value: discern-audio
+      # ── VOICE ───────────────────────────────────────────────────────────
+      #
+      # SET BY HAND IN THE DASHBOARD UNTIL 2026-09-06 AND NOT IN THIS FILE.
+      # That is a live hazard, not a tidiness point: a Blueprint sync would have
+      # removed it, and `tts-pregenerate` throws a TERMINAL error when it is
+      # false — which is exactly the loop the job was in on 4 September.
+      #
+      # Both services carry it. The API needs it to offer voice at all; the
+      # worker needs it because pregeneration is one of its jobs.
+      - key: VOICE_ENABLED
+        value: true
+      # Her replies are NOT spoken by default. Per-request, never a standing
+      # preference: a spoken turn is ~34x the cost of a text one and never
+      # caches. This flag only decides whether the app may ask.
+      - key: SPEAK_REPLIES
+        value: false
+      # ── VOICE IDENTITY ──────────────────────────────────────────────────
+      #
+      # These five are part of the audio CACHE KEY: the hash covers the text,
+      # the voice, the model and every setting. Change any of them and all
+      # 7,819 cached recordings stop matching and are silently re-synthesized
+      # at full price. They are pinned here so a dashboard edit is a diff
+      # rather than a surprise bill.
+      - key: ELEVENLABS_TTS_MODEL
+        value: eleven_turbo_v2_5
+      - key: ELEVENLABS_STABILITY
+        value: 0.45
+      - key: ELEVENLABS_SIMILARITY_BOOST
+        value: 0.75
+      - key: ELEVENLABS_STYLE
+        value: 0.35
+      - key: ELEVENLABS_SPEED
+        value: 1
+      - key: ELEVENLABS_SPEAKER_BOOST
+        value: true
       # ABIGAIL'S PROMPTS ARE NOT IN THIS REPOSITORY and the service will not
       # boot without them. Add each as a SECRET FILE in the Render dashboard:
       #
@@ -129,6 +211,41 @@ services:
         value: discern-audio
       # Lower than the API's: the worker is a background poller, and this cluster
       # also serves a production application.
+      # ── VOICE ───────────────────────────────────────────────────────────
+      #
+      # SET BY HAND IN THE DASHBOARD UNTIL 2026-09-06 AND NOT IN THIS FILE.
+      # That is a live hazard, not a tidiness point: a Blueprint sync would have
+      # removed it, and `tts-pregenerate` throws a TERMINAL error when it is
+      # false — which is exactly the loop the job was in on 4 September.
+      #
+      # Both services carry it. The API needs it to offer voice at all; the
+      # worker needs it because pregeneration is one of its jobs.
+      - key: VOICE_ENABLED
+        value: true
+      # Her replies are NOT spoken by default. Per-request, never a standing
+      # preference: a spoken turn is ~34x the cost of a text one and never
+      # caches. This flag only decides whether the app may ask.
+      - key: SPEAK_REPLIES
+        value: false
+      # ── VOICE IDENTITY ──────────────────────────────────────────────────
+      #
+      # These five are part of the audio CACHE KEY: the hash covers the text,
+      # the voice, the model and every setting. Change any of them and all
+      # 7,819 cached recordings stop matching and are silently re-synthesized
+      # at full price. They are pinned here so a dashboard edit is a diff
+      # rather than a surprise bill.
+      - key: ELEVENLABS_TTS_MODEL
+        value: eleven_turbo_v2_5
+      - key: ELEVENLABS_STABILITY
+        value: 0.45
+      - key: ELEVENLABS_SIMILARITY_BOOST
+        value: 0.75
+      - key: ELEVENLABS_STYLE
+        value: 0.35
+      - key: ELEVENLABS_SPEED
+        value: 1
+      - key: ELEVENLABS_SPEAKER_BOOST
+        value: true
       - key: MONGODB_MAX_POOL_SIZE
         value: 5
       - key: WORKER_CONCURRENCY
