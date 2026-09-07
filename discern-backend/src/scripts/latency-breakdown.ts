@@ -20,6 +20,7 @@ import {
   connectToDatabase,
   disconnectFromDatabase,
 } from "../db/connect";
+import { assertWritable } from "../lib/production-guard";
 import { ConversationModel, UserModel } from "../models";
 import { embedQuery } from "../services/corpus/embeddings";
 import { rewriteQueryForRetrieval } from "../services/corpus/query-rewrite";
@@ -94,6 +95,10 @@ function argOf(flag: string): string | null {
 }
 
 async function main(): Promise<void> {
+  // Refuses to touch the production database without an explicit flag on
+  // this run. See lib/production-guard.ts.
+  assertWritable("latency-breakdown.ts");
+
   await connectToDatabase();
   assertCorpusWritable("latency-breakdown");
 

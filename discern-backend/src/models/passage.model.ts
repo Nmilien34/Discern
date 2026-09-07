@@ -1,3 +1,4 @@
+import type { Handling } from "../services/corpus/enrichment";
 // ARCHITECTURE.md §6, `passages` — THE RETRIEVABLE UNIT.
 //
 // Embed passages, never individual verses. Verse-level embeddings retrieve badly
@@ -80,7 +81,7 @@ export interface PassageDocument extends Document<Types.ObjectId> {
    * for someone and is good prose for Abigail to read; it fired on 30 of 30
    * sample passages, so it cannot rank anything. This discriminates.
    */
-  handling?: "open" | "care" | "on-request-only";
+  handling?: Handling;
   enrichmentModel?: string;
   enrichmentVersion?: number;
   enrichedAt?: Date;

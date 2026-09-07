@@ -13,6 +13,7 @@ import {
   MessageModel,
   PassageModel,
   SpeechCacheModel,
+  TranslationModel,
   UserMemoryModel,
   UserModel,
 } from "../models";
@@ -28,19 +29,27 @@ import { enqueue, TerminalJobError } from "./queue";
 import { speakable } from "../services/speech/sentences";
 import { synthesize } from "../services/speech/tts";
 import { embedMissingPassages } from "./embedding-backfill";
+import type { Reporter } from "./job-run.service";
 
-export type JobHandler = (job: JobDocument) => Promise<void>;
+// `report` is how a handler says what it DID. Existing handlers that take only
+// `job` remain assignable, so adding it did not touch any call site.
+export type JobHandler = (job: JobDocument, report: Reporter) => Promise<void>;
 
 /**
  * 1. EMBEDDING BACKFILL. Already scripted; this puts it under the runner so it
  *    is retried, leased and observable like everything else instead of being a
  *    thing somebody remembers to run.
  */
-const embeddingBackfill: JobHandler = async (job) => {
+const embeddingBackfill: JobHandler = async (job, report) => {
   const limit = Number(job.payload.limit ?? 200);
   const { embedded, remaining } = await embedMissingPassages(limit);
 
   logger.info({ embedded, remaining }, "embedding backfill batch complete");
+  // `skipped` when there was nothing to embed. As of 2026-09-06 all 4,102
+  // passages already carry an embedding — put there by scripts/embed-corpus.ts,
+  // not by this job, which has never run. That is a legitimate no-op and it
+  // should read as one rather than as a success.
+  report({ result: { embedded, remaining, limit }, skipped: embedded === 0 });
 
   // Self-continuing: one batch per job so a lease is never held for an hour.
   if (remaining > 0) {
@@ -60,7 +69,7 @@ const embeddingBackfill: JobHandler = async (job) => {
  *    Stage anchors first, then whatever has been offered most. Bounded per job
  *    because this spends money.
  */
-const ttsPregenerate: JobHandler = async (job) => {
+const ttsPregenerate: JobHandler = async (job, report) => {
   // TERMINAL. VOICE_ENABLED does not become true because we waited 4 minutes.
   // Before this check the job backed off 60s, 120s, 240s against a config
   // value, doubling toward a queue that looks stuck.
@@ -74,63 +83,124 @@ const ttsPregenerate: JobHandler = async (job) => {
 
   const limit = Math.min(Number(job.payload.limit ?? 20), 100);
 
-  const cached = new Set(
-    (await SpeechCacheModel.find({ passageReference: { $ne: null } })
-      .select("passageReference")
-      .lean()).map((r) => r.passageReference),
+  // ── THREE BUGS FIXED HERE, 2026-09-06 ──────────────────────────────────────
+  //
+  // 1. THE CANDIDATE QUERY TOOK THE FIRST 80 PASSAGES OF EVERYTHING.
+  //    `.limit(limit * 4)` with no sort and no filter for uncached. With 7,819
+  //    cache rows the first eighty in natural order were all cached, so the
+  //    loop skipped every one, `done` stayed at zero, and the job reported
+  //    success. It had been "succeeding" and producing nothing since 5
+  //    September. The candidate set is now built from what is actually MISSING.
+  //
+  // 2. THE SKIP-SET WAS KEYED ON REFERENCE ALONE, so a passage cached in one
+  //    translation was skipped in the other — forever. Measured on 2026-09-06:
+  //    that wrongly skipped 3,914 passage/translation pairs, which is the
+  //    entire KJV corpus. The key is now reference AND translation.
+  //
+  // 3. ONLY ONE TRANSLATION WAS EVER SYNTHESIZED. `[...texts.values()][0]`
+  //    takes Map insertion order, which is why an earlier run produced KJV
+  //    when it meant WEB. Every translation of a passage is now a separate
+  //    unit of work with its own identity.
+  //
+  // The skip-set is an OPTIMISATION, not the guard. `synthesize()` looks up by
+  // content hash and returns `cached: true` without spending, so a label that
+  // is stale costs one lookup rather than one recording. That matters, because
+  // 3,911 of the cache rows pre-date the translationId column and carry null.
+  const cachedPairs = new Set(
+    (
+      await SpeechCacheModel.find({ passageReference: { $ne: null } })
+        .select("passageReference translationId")
+        .lean()
+    ).map((r) => `${r.passageReference}|${r.translationId ?? ""}`),
   );
 
+  const translations = await TranslationModel.find({}).select("_id").lean();
+
+  // Sorted, so successive runs walk the corpus in a stable order and make
+  // progress instead of re-scanning the same head of an unordered collection.
   const passages = await PassageModel.find({
     handling: { $ne: "on-request-only" },
     stageSlugs: { $exists: true, $ne: [] },
   })
     .select("reference texts")
-    .limit(limit * 4)
+    .sort({ reference: 1 })
     .lean();
 
+  let scanned = 0;
+  let alreadyCached = 0;
+  let overCap = 0;
   let done = 0;
+  let characters = 0;
 
-  for (const p of passages) {
-    if (done >= limit) break;
-    if (cached.has(p.reference)) continue;
+  outer: for (const p of passages) {
+    for (const t of translations) {
+      const translationId = String(t._id);
+      scanned += 1;
 
-    const texts = p.texts as unknown as Map<string, string> | Record<string, string>;
-    const first =
-      texts instanceof Map ? [...texts.values()][0] : Object.values(texts ?? {})[0];
-    const text = speakable(String(first ?? ""));
-    if (!text) continue;
+      if (cachedPairs.has(`${p.reference}|${translationId}`)) {
+        alreadyCached += 1;
+        continue;
+      }
 
-    // "pregen" has its own ceiling scope, so warming the cache can never
-    // consume a real person's daily allowance.
-    const result = await synthesize(text, "pregen", {
-      passageReference: p.reference,
-      scope: "bulk",
-    });
+      const texts = p.texts as unknown as Map<string, string> | Record<string, string>;
+      const raw =
+        texts instanceof Map ? texts.get(translationId) : (texts ?? {})[translationId];
+      const text = speakable(String(raw ?? ""));
+      if (!text) continue;
 
-    if (result?.refusedReason) {
-      // Not terminal: a DAILY ceiling clears at midnight, so this job simply
-      // stops and the next day's enqueue picks it up. Returning rather than
-      // throwing means it completes cleanly having done what it could.
-      logger.warn(
-        { reason: result.refusedReason, limit: result.refusedLimit, pregenerated: done },
-        "tts pregeneration stopped by the ceiling; resuming tomorrow",
-      );
-      return;
+      // OVER THE PER-REQUEST CAP. Counted and skipped rather than attempted:
+      // three references exceed it in both translations (Psalm 119,
+      // 2 Samuel 11:1-12:25, Psalm 78) and they need the chunking work in
+      // DEFERRED.md §9, not a retry loop against a limit.
+      if (text.length > env.TTS_MAX_CHARS_PER_REQUEST) {
+        overCap += 1;
+        continue;
+      }
+
+      if (done >= limit) break outer;
+
+      // "pregen" has its own ceiling scope, so warming the cache can never
+      // consume a real person's daily allowance.
+      const result = await synthesize(text, "pregen", {
+        passageReference: p.reference,
+        translationId,
+        scope: "bulk",
+      });
+
+      if (result?.refusedReason) {
+        // Not terminal: a DAILY ceiling clears at midnight, so this job simply
+        // stops and the next day's enqueue picks it up.
+        logger.warn(
+          { reason: result.refusedReason, limit: result.refusedLimit, pregenerated: done },
+          "tts pregeneration stopped by the ceiling; resuming tomorrow",
+        );
+        report({
+          result: { synthesized: done, characters, scanned, alreadyCached, overCap, stoppedBy: result.refusedReason },
+          skipped: done === 0,
+        });
+        return;
+      }
+
+      if (result && !result.cached) characters += result.characters;
+      done += 1;
     }
-
-    done += 1;
   }
 
-  logger.info({ pregenerated: done }, "tts pregeneration batch complete");
+  const missing = scanned - alreadyCached;
+
+  logger.info({ pregenerated: done, scanned, alreadyCached, overCap }, "tts pregeneration batch complete");
+
+  // `skipped` ONLY when there was genuinely nothing to do. A run that did
+  // nothing while work remained is the bug this job just had, and it must not
+  // report the same thing as a run that did nothing because the corpus is
+  // fully covered.
+  report({
+    result: { synthesized: done, characters, scanned, alreadyCached, overCap, missingWhenFinished: missing - done },
+    skipped: done === 0 && missing - done === 0,
+  });
 };
 
-/**
- * 3. NIGHTLY MEMORY SUMMARY. The one that matters most.
- *
- *    Yesterday's conversations become openThreads, which is the difference
- *    between someone who knows you and a fresh chat every time.
- */
-const memorySummarize: JobHandler = async (job) => {
+const memorySummarize: JobHandler = async (job, report) => {
   const userId = String(job.payload.userId ?? "");
 
   // TERMINAL. A payload does not grow a userId on the third attempt.
@@ -144,6 +214,7 @@ const memorySummarize: JobHandler = async (job) => {
   // Everything below CAN fail transiently — an OpenAI 429, a Mongo blip — and
   // those still retry with backoff, which is what backoff is for.
   await summarizeYesterday(userId);
+  report({ result: { userId } });
 };
 
 /**
@@ -153,7 +224,7 @@ const memorySummarize: JobHandler = async (job) => {
  *     send. Someone who has not chosen a time is never found, because
  *     `notificationTime: null` is the shipped default and it means silence.
  */
-const notificationSchedule: JobHandler = async () => {
+const notificationSchedule: JobHandler = async (_job, report) => {
   const candidates = await UserModel.find({
     "preferences.notificationTime": { $ne: null },
     "preferences.pushToken": { $ne: null },
@@ -178,6 +249,13 @@ const notificationSchedule: JobHandler = async () => {
   }
 
   logger.info({ considered: candidates.length, scheduled }, "notification sweep complete");
+  // SKIPPED, not success, when it enqueued nothing. Between 2026-09-03 and
+  // 2026-09-06 this ran 821 times and enqueued zero sends — correctly, since no
+  // user has a notification time — and every one of those runs looked green.
+  report({
+    result: { considered: candidates.length, scheduled },
+    skipped: scheduled === 0,
+  });
 };
 
 /**
@@ -187,7 +265,7 @@ const notificationSchedule: JobHandler = async () => {
  *     outcome — no carrying means nothing to say, and nothing to say means
  *     nothing is sent.
  */
-const notificationSend: JobHandler = async (job) => {
+const notificationSend: JobHandler = async (job, report) => {
   const userId = String(job.payload.userId ?? "");
   const user = await UserModel.findById(userId);
 
@@ -211,6 +289,13 @@ const notificationSend: JobHandler = async (job) => {
   );
 
   await markNotified(userId);
+  // SKIPPED on purpose. Delivery is not wired, so this composed a notification
+  // and sent nothing. Reporting success here would be the exact lie this whole
+  // record exists to prevent.
+  report({
+    result: { userId, composed: true, delivered: false, reason: "no push credential" },
+    skipped: true,
+  });
 };
 
 export const HANDLERS: Record<JobType, JobHandler> = {

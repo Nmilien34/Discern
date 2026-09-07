@@ -25,6 +25,7 @@ import {
   connectToDatabase,
   disconnectFromDatabase,
 } from "../db/connect";
+import { assertWritable } from "../lib/production-guard";
 import { logger } from "../lib/logger";
 import { PassageModel } from "../models";
 import { estimateEnrichmentCost } from "../services/corpus/enrichment";
@@ -145,6 +146,10 @@ async function classifyBatch(
 }
 
 async function main(): Promise<void> {
+  // Refuses to touch the production database without an explicit flag on
+  // this run. See lib/production-guard.ts.
+  assertWritable("reclassify-handling.ts");
+
   const dryRun = process.argv.includes("--dry-run");
   const modelId = models.premise;
 

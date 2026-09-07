@@ -15,6 +15,7 @@ import { bookBySlug } from "@discern/shared";
 import type { Types } from "mongoose";
 
 import { NotFoundError, ValidationError } from "../../lib/errors";
+import { hasUnclosedQuotation } from "../../lib/quote-balance";
 import { formatReference, parseReference } from "../../lib/reference";
 import type { AuthorDocument, TranslationDocument } from "../../models";
 import {
@@ -238,6 +239,47 @@ async function findSpanVerses(
     .lean();
 }
 
+/**
+ * The stored pericope holding the verse immediately after a cited span.
+ *
+ * NOT "the next pericope that starts after this one". A citation that leaves a
+ * speech open almost always ends INSIDE a pericope, so the passage the speech
+ * runs on into is the one containing endVerse + 1 — which usually STARTS BEFORE
+ * the citation ended. Matthew 8:8-10 continues into Matthew 8:10-13, not 8:14-17;
+ * Job 38:4-7 into Job 38:7-20, not 38:21-34. A `startVerse > endVerse` query
+ * skips exactly the right answer and returns a plausible wrong one, which is
+ * how this was caught: by looking at what it said, not at whether it ran.
+ *
+ * Falls forward to the first pericope of the next chapter when the citation
+ * ends on the last verse of one.
+ */
+async function continuationOf(
+  bookSlug: string,
+  endChapter: number,
+  endVerse: number,
+): Promise<string | null> {
+  const containing = await PassageModel.findOne({
+    bookSlug,
+    chapter: endChapter,
+    startVerse: { $lte: endVerse + 1 },
+    endVerse: { $gte: endVerse + 1 },
+  })
+    .select("reference")
+    .lean();
+
+  if (containing) return containing.reference;
+
+  const nextChapter = await PassageModel.findOne({
+    bookSlug,
+    chapter: { $gt: endChapter },
+  })
+    .sort({ chapter: 1, startVerse: 1 })
+    .select("reference")
+    .lean();
+
+  return nextChapter?.reference ?? null;
+}
+
 export async function getPassageByReference(
   rawReference: string,
   translationAbbreviation?: string,
@@ -295,6 +337,18 @@ export async function getPassageByReference(
   // so the caller can tell the difference.
   const stored = await PassageModel.findOne({ reference: actualReference });
 
+  // WHERE THE SPEECH GOES ON.
+  //
+  // Computed only when this text actually opens a quotation it does not close,
+  // never merely because a next pericope exists — 951 of 4,090 WEB pericopes
+  // are in this state and the other 3,139 must not sprout an affordance. See
+  // passageResponseSchema.continuesIn for why the text itself is left alone.
+  const text = verses.map((verse) => verse.text).join(" ");
+
+  const continuesIn = hasUnclosedQuotation(text)
+    ? await continuationOf(meta.slug, last.chapter, last.verse)
+    : null;
+
   const book = await BookModel.findOne({ slug: meta.slug });
   const author = book?.authorId ? await AuthorModel.findById(book.authorId) : null;
 
@@ -308,7 +362,8 @@ export async function getPassageByReference(
     endVerse: last.verse,
     endChapter: last.chapter,
     translation: toTranslation(translation),
-    text: verses.map((verse) => verse.text).join(" "),
+    continuesIn,
+    text,
     verses: verses.map((verse) => ({
       chapter: verse.chapter,
       verse: verse.verse,

@@ -1,3 +1,6 @@
+import {
+  healthResponseSchema,
+} from "@discern/shared";
 import { Router } from "express";
 
 import { isDatabaseReachable } from "../db/connect";
@@ -17,7 +20,7 @@ healthRouter.get(
 
     // `commit` and `service` are here so a stale build is one curl away rather
     // than a diagnosis. See lib/build-info.ts.
-    sendData(res, {
+    sendData(res, healthResponseSchema, {
       status: database ? "ok" : "degraded",
       database,
       service: build.service,

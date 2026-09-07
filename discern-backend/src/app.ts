@@ -13,6 +13,8 @@ import { env } from "./config/env";
 import { errorHandler, notFoundHandler } from "./middleware/error.middleware";
 import { loadUser, requireAuth } from "./middleware/auth.middleware";
 import { requireEntitlement } from "./middleware/require-entitlement.middleware";
+import { opsEnabled, opsRouter } from "./routes/ops.routes";
+import { stagesRouter } from "./routes/stages.routes";
 import { requestLogger } from "./middleware/request-logger.middleware";
 import { abigailRouter } from "./routes/abigail.routes";
 import { authRouter } from "./routes/auth.routes";
@@ -20,7 +22,9 @@ import { bibleRouter } from "./routes/bible.routes";
 import { billingRouter } from "./routes/billing.routes";
 import { carryingsRouter } from "./routes/carryings.routes";
 import { healthRouter } from "./routes/health.routes";
+import { journalExportRouter, journalRouter } from "./routes/journal.routes";
 import { journeyRouter } from "./routes/journey.routes";
+import { readsRouter } from "./routes/reads.routes";
 import { meRouter } from "./routes/me.routes";
 
 export function createApp(): Express {
@@ -56,6 +60,13 @@ export function createApp(): Express {
   v1.use("/auth", authRouter);
   v1.use("/me", meRouter);
   v1.use("/billing", billingRouter);
+  // OPERATOR-ONLY, and mounted only when OPS_TOKEN is set, so an unset secret
+  // means the surface does not exist rather than standing open. It stays
+  // outside the ENTITLEMENT gate for the original reason — a paywall in front
+  // of "are the jobs running" hides the answer exactly when it matters — but
+  // `requireAuth` was never a gate here: POST /v1/auth/device mints a token
+  // from any device id with no credential.
+  if (opsEnabled()) v1.use("/ops", opsRouter);
 
   // EVERYTHING ELSE IS BEHIND THE TRIAL.
   //
@@ -65,8 +76,34 @@ export function createApp(): Express {
   const gated = [requireAuth, loadUser, requireEntitlement()];
 
   v1.use("/bible", ...gated, bibleRouter);
+  // JOURNEY IS SPLIT. The seven stages and whether each has content are static
+  // config with nothing user-specific in them, and ONBOARDING NEEDS THEM BEFORE
+  // THE PAYWALL: screen 6 shows all seven vices, screen 7 offers only the ones
+  // with reads. Gating that list makes those two screens unbuildable, because
+  // the person has not paid yet.
+  //
+  // Everything else under /journey is that person's own stage and seed, and
+  // stays behind the wall.
+  v1.use("/journey", stagesRouter);
   v1.use("/journey", ...gated, journeyRouter);
+  // The reads themselves, and the two writes that move the seed. Gated: this is
+  // the paid half of the product, and unlike the stage list nothing here is
+  // needed before the paywall.
+  v1.use("/journey", ...gated, readsRouter);
   v1.use("/carryings", ...gated, carryingsRouter);
+  // THE JOURNAL IS SPLIT, for one sentence's sake.
+  //
+  // The deletion screen says "Your journal is deleted with your account. Export
+  // it first if you want to keep it." Someone reading that is leaving, and
+  // someone leaving has usually already let the subscription lapse — so the
+  // export must not be behind the wall, or that sentence is a lie told to
+  // exactly the person it was written for. Everything else about the journal is
+  // product and sits behind the wall like the rest of it.
+  //
+  // Order matters: the ungated /export mount must come FIRST, or the gated
+  // router matches GET /journal/export and answers 402.
+  v1.use("/journal", journalExportRouter);
+  v1.use("/journal", ...gated, journalRouter);
   v1.use("/abigail", ...gated, abigailRouter);
 
 

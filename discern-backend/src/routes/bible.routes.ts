@@ -1,3 +1,10 @@
+import {
+  authorDetailSchema,
+  authorsListResponseSchema,
+  booksListResponseSchema,
+  chapterResponseSchema,
+  passageResponseSchema,
+} from "@discern/shared";
 import { Router } from "express";
 import { z } from "zod";
 
@@ -53,7 +60,7 @@ bibleRouter.get(
 
     const authorById = new Map(authors.map((a) => [String(a._id), a]));
 
-    sendData(res, {
+    sendData(res, booksListResponseSchema, {
       books: books.map((book) => {
         const author = book.authorId
           ? authorById.get(String(book.authorId))
@@ -79,14 +86,14 @@ bibleRouter.get(
 bibleRouter.get(
   "/authors",
   asyncHandler(async (_req, res) => {
-    sendData(res, { authors: await listAuthors() });
+    sendData(res, authorsListResponseSchema, { authors: await listAuthors() });
   }),
 );
 
 bibleRouter.get(
   "/authors/:slug",
   asyncHandler(async (req, res) => {
-    sendData(res, await getAuthorBySlug(String(req.params.slug ?? "")));
+    sendData(res, authorDetailSchema, await getAuthorBySlug(String(req.params.slug ?? "")));
   }),
 );
 
@@ -102,6 +109,7 @@ bibleRouter.get(
 
     sendData(
       res,
+      chapterResponseSchema,
       await getChapter(String(req.params.slug ?? ""), chapter, query.translation),
     );
   }),
@@ -126,6 +134,7 @@ bibleRouter.get(
 
     sendData(
       res,
+      passageResponseSchema,
       await getPassageByReference(
         String(req.params.reference ?? ""),
         query.translation,

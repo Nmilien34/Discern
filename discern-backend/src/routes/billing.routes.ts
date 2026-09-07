@@ -1,3 +1,7 @@
+import {
+  productsResponseSchema,
+  webhookResponseSchema,
+} from "@discern/shared";
 import type { NextFunction, Request, Response } from "express";
 import { Router } from "express";
 
@@ -40,7 +44,7 @@ billingRouter.post(
   requireRevenueCatSecret,
   validateBody(revenueCatWebhookSchema),
   asyncHandler(async (req, res) => {
-    sendData(res, await applyRevenueCatWebhook(req.body));
+    sendData(res, webhookResponseSchema, await applyRevenueCatWebhook(req.body));
   }),
 );
 
@@ -101,7 +105,7 @@ billingRouter.get(
           ]
         : [];
 
-    sendData(res, {
+    sendData(res, productsResponseSchema, {
       stores: {
         apple,
         // Absent until configured, rather than an empty array pretending the

@@ -462,6 +462,22 @@ const envSchema = z.object({
     .transform((v) => v === "true"),
 
   /**
+   * Shared secret for GET /v1/ops/jobs. UNSET MEANS THE ROUTE DOES NOT EXIST.
+   *
+   * That endpoint used to require only `requireAuth`, which sounds like a gate
+   * and is not one: `POST /v1/auth/device` mints a token from an arbitrary
+   * device id with no credential at all, so "authenticated" was one call away
+   * from anyone. And two job results carry a `userId` — memory-summary and
+   * notification-send both report one — so an operational surface was handing
+   * out user identifiers to strangers.
+   *
+   * It is an operator secret rather than a user role because "are the jobs
+   * running" is an operator question. Absence means the surface is absent:
+   * there is no default-open state and no config mistake that leaves it ajar.
+   */
+  OPS_TOKEN: z.string().min(24).optional(),
+
+  /**
    * Bundle id of the iOS app, used as the `aud` claim when verifying a Sign in
    * with Apple identity token.
    *

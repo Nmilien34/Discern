@@ -48,6 +48,39 @@ seedEventSchema.index({ userId: 1, at: -1 });
 seedEventSchema.index({ userId: 1, type: 1 });
 
 /**
+ * THE ONCE-EVER GUARANTEE, ENFORCED BY THE DATABASE RATHER THAN BY A CHECK.
+ *
+ * Three events are meant to happen once per thing, forever: you finish a read
+ * once, you do what it asked once, you enter a virtue once. Each service does a
+ * `SeedEventModel.exists(...)` before writing — and a read-then-write is not a
+ * guarantee. Two concurrent requests both pass the check and both insert, which
+ * at 25 points for an action is a double award for one double-tap.
+ *
+ * So the check is a FAST PATH and this index is the truth. A duplicate raises
+ * E11000, which `recordSeedEvent` treats as success rather than an error: the
+ * row already existed, which is exactly the outcome that was wanted.
+ *
+ * PARTIAL, and only on these three. The other four are legitimately repeatable
+ * — you dwell on the same carrying many times, and the ledger is a faithful
+ * record of that; the ceilings in seed-growth.ts are what bound them, at read
+ * time, where an opinion about worth belongs.
+ *
+ * `stage_movement` rows written before 2026-09-07 carry a null sourceId, which
+ * would collide with each other under this index. They are backfilled from
+ * their stage documents by scripts/backfill-stage-movement-source.ts, and that
+ * has to run BEFORE this index is created on an existing database.
+ */
+seedEventSchema.index(
+  { userId: 1, type: 1, sourceId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      type: { $in: ["read_completed", "action_taken", "stage_movement"] },
+    },
+  },
+);
+
+/**
  * Append-only, enforced rather than documented.
  *
  * The ledger's whole value is that it is the record of what happened. A single
@@ -101,11 +134,39 @@ function isOwnershipReparent(update: unknown): boolean {
   return meaningful.length === 1 && meaningful[0] === "userId";
 }
 
+/**
+ * The ONE exception to append-only, added 2026-09-06 with account deletion.
+ *
+ * The rule exists so history cannot be rewritten and the derived score stays
+ * honest. Erasing the rows of an account that is being deleted is not a rewrite
+ * of history — it is the removal of a person who will not have a score, and
+ * Apple requires it. So the escape is deliberately narrow: the caller must pass
+ * `{ accountDeletion: true }` AND filter on a userId. It cannot be used to drop
+ * an event, re-weight a day, or tidy a ledger.
+ */
+function isAccountDeletion(this: {
+  getOptions?: () => Record<string, unknown>;
+  getFilter?: () => Record<string, unknown>;
+}): boolean {
+  const options = typeof this.getOptions === "function" ? this.getOptions() : {};
+  const filter = typeof this.getFilter === "function" ? this.getFilter() : {};
+  return options?.accountDeletion === true && filter?.userId !== undefined;
+}
+
 function refuseMutation(
-  this: { getUpdate?: () => unknown },
+  this: {
+    getUpdate?: () => unknown;
+    getOptions?: () => Record<string, unknown>;
+    getFilter?: () => Record<string, unknown>;
+  },
   next: (error?: Error) => void,
 ): void {
   if (typeof this.getUpdate === "function" && isOwnershipReparent(this.getUpdate())) {
+    next();
+    return;
+  }
+
+  if (isAccountDeletion.call(this)) {
     next();
     return;
   }
@@ -114,7 +175,8 @@ function refuseMutation(
     new Error(
       "seedEvents is an APPEND-ONLY ledger (ARCHITECTURE.md §6). Rows are never " +
         "updated or deleted, except to reparent `userId` during an account " +
-        "merge. To change what an event is worth, change the curve in " +
+        "merge, or to erase an account being deleted. To change what an event " +
+        "is worth, change the curve in " +
         "config/seed-growth.ts — the score is derived, not stored.",
     ),
   );

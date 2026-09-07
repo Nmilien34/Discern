@@ -465,6 +465,11 @@ async function hydratePassages(
       startVerse: passage.startVerse,
       endVerse: passage.endVerse,
       endChapter: passage.endChapter,
+      // NULL FOR RETRIEVAL, ALWAYS. The continuation affordance belongs to a
+      // block a person is deliberately reading — a cultivation read's set-apart
+      // passage — not to a search result or a thing Abigail reached for. It
+      // would be noise in a list and it is not a claim retrieval needs to make.
+      continuesIn: null,
       translation: {
         id: String(translation._id),
         abbreviation: translation.abbreviation,

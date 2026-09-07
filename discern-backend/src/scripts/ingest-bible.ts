@@ -24,8 +24,10 @@ import {
   connectToDatabase,
   disconnectFromDatabase,
 } from "../db/connect";
+import { assertWritable } from "../lib/production-guard";
 import { logger } from "../lib/logger";
 import type { VerseDocument } from "../models";
+import { splitParagraphMark } from "../lib/verse-text";
 import { TranslationModel, VerseModel } from "../models";
 import type { ParsedBook } from "../services/corpus/parse-usfm";
 import { parseUsfm } from "../services/corpus/parse-usfm";
@@ -157,6 +159,10 @@ function parseFile(file: string, contents: string): ParsedBook {
 }
 
 async function main(): Promise<void> {
+  // Refuses to touch the production database without an explicit flag on
+  // this run. See lib/production-guard.ts.
+  assertWritable("ingest-bible.ts");
+
   const args = parseArgs(process.argv.slice(2));
 
   await connectToDatabase();
@@ -258,19 +264,25 @@ async function main(): Promise<void> {
       continue;
     }
 
+    // The KJV carries its paragraph marks inline as "¶". They are converted to
+    // a flag HERE, at the point of ingestion, so a re-ingest can never
+    // reintroduce the character that was migrated out on 2026-09-06.
     const operations: AnyBulkWriteOperation<VerseDocument>[] = parsed.verses.map(
-      (verse) => ({
-        updateOne: {
-          filter: {
-            translationId: translation._id,
-            bookSlug: book.slug,
-            chapter: verse.chapter,
-            verse: verse.verse,
+      (verse) => {
+        const { text, paragraphStart } = splitParagraphMark(verse.text);
+        return {
+          updateOne: {
+            filter: {
+              translationId: translation._id,
+              bookSlug: book.slug,
+              chapter: verse.chapter,
+              verse: verse.verse,
+            },
+            update: { $set: { text, paragraphStart } },
+            upsert: true,
           },
-          update: { $set: { text: verse.text } },
-          upsert: true,
-        },
-      }),
+        };
+      },
     );
 
     const result = await VerseModel.bulkWrite(operations, { ordered: false });

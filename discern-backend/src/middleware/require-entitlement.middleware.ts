@@ -25,6 +25,7 @@
 
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 
+import type { PaymentRequiredDetails } from "@discern/shared";
 import { PAID_ENTITLEMENT_STATUSES } from "@discern/shared";
 
 import {
@@ -117,13 +118,17 @@ export function requireEntitlement(): RequestHandler {
     next(
       new PaymentRequiredError(
         "Discern requires an active subscription. Start your 7-day free trial to continue.",
+        // Typed against the shared schema rather than written as a bare
+        // literal. The schema was `.passthrough()` and unused until 2026-09-06,
+        // which meant the 402's details shape was defined twice with nothing
+        // holding the two together.
         {
           status: user.entitlement.status,
           reason: "no_active_entitlement",
           // The trial is an introductory offer on the ANNUAL sku only; monthly
           // charges immediately. The app needs this to render the right paywall.
           trialAvailableOn: "annual",
-        },
+        } satisfies PaymentRequiredDetails,
       ),
     );
   };

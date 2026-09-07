@@ -18,6 +18,8 @@ import { logger } from "../lib/logger";
 import "../models";
 import { reportVectorIndexStatus } from "../services/corpus/retrieval";
 import { HANDLERS, queueSnapshot, scheduleRecurring } from "../jobs/handlers";
+import { recordRun } from "../jobs/job-run.service";
+import type { JobReport, Reporter } from "../jobs/job-run.service";
 import { claim, complete, fail, TerminalJobError, WORKER_ID } from "../jobs/queue";
 
 let stopping = false;
@@ -74,14 +76,44 @@ async function poller(index: number): Promise<void> {
       continue;
     }
 
-    const startedAt = Date.now();
+    const startedAt = new Date();
+
+    // The handler's own account of what it did. Undefined means it never
+    // reported, which is recorded as an empty result rather than dropped — a
+    // job that finished and said nothing is itself worth knowing.
+    let reported: JobReport | undefined;
+    const report: Reporter = (r) => {
+      reported = r;
+    };
 
     try {
-      await handler(job);
+      await handler(job, report);
       await complete(job);
-      jobLog.info({ ms: Date.now() - startedAt }, "job done");
+      jobLog.info(
+        { ms: Date.now() - startedAt.getTime(), ...(reported?.result ?? {}) },
+        "job done",
+      );
+      await recordRun({
+        job: job.type,
+        startedAt,
+        finishedAt: new Date(),
+        outcome: reported?.skipped ? "skipped" : "success",
+        result: reported?.result ?? {},
+        jobId: job._id,
+      });
     } catch (error) {
       await fail(job, error);
+      // Recorded AFTER fail(), so a bookkeeping problem can never stop the
+      // queue from marking the job failed.
+      await recordRun({
+        job: job.type,
+        startedAt,
+        finishedAt: new Date(),
+        outcome: "failure",
+        result: reported?.result ?? {},
+        error,
+        jobId: job._id,
+      });
     }
   }
 }

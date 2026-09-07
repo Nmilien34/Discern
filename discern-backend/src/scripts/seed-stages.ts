@@ -18,6 +18,7 @@ import {
   connectToDatabase,
   disconnectFromDatabase,
 } from "../db/connect";
+import { assertWritable } from "../lib/production-guard";
 import { logger } from "../lib/logger";
 import { parseReference } from "../lib/reference";
 import { PassageModel, StageModel } from "../models";
@@ -76,6 +77,10 @@ async function resolveAnchor(reference: string): Promise<Resolution> {
 }
 
 async function main(): Promise<void> {
+  // Refuses to touch the production database without an explicit flag on
+  // this run. See lib/production-guard.ts.
+  assertWritable("seed-stages.ts");
+
   await connectToDatabase();
   assertCorpusWritable("seed-stages");
 

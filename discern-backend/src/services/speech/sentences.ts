@@ -110,6 +110,17 @@ export class SentenceSplitter {
  */
 export function speakable(text: string): string {
   return text
+    // THE KJV PARAGRAPH MARK. It is typesetting, not a word, and a narrator
+    // asked to read it produces either a swallowed noise or "pilcrow".
+    //
+    // Added 2026-09-07, and it changes no existing output — both `verses` and
+    // `passages.texts` were cleaned the same day, so there is nothing left for
+    // this rule to strip and no recording is orphaned by adding it. That is the
+    // whole reason to add it NOW: a re-ingest, a new translation, or any source
+    // that carries them would otherwise reach the synthesiser, and adding the
+    // rule at THAT point would cost a full re-synthesis. Defence at the
+    // transform as well as in the data, bought for nothing.
+    .replace(/¶\s*/g, "")
     .replace(/^[\s]*[-*•]\s+/gm, "")
     .replace(/\((?:see\s+)?[1-3]?\s*[A-Z][a-z]+\.?\s+\d+[:\d\s,–-]*\)/g, "")
     .replace(/[*_`#]/g, "")

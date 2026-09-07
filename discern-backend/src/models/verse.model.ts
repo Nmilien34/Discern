@@ -16,6 +16,16 @@ export interface VerseDocument extends Document<Types.ObjectId> {
   chapter: number;
   verse: number;
   text: string;
+  /**
+   * This verse opens a paragraph in the source typesetting.
+   *
+   * Converted from the KJV's inline "¶" on 2026-09-06 — 2,970 verses, 9.5% of
+   * that translation, none in WEB. The mark is real structure and is kept as a
+   * flag; the character itself is gone, because it was rendering into passage
+   * blocks and carryings and would otherwise have been read aloud by a
+   * narrator and baked into an audio cache key. See lib/verse-text.ts.
+   */
+  paragraphStart: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -31,6 +41,7 @@ const verseSchema = new Schema<VerseDocument>(
     chapter: { type: Number, required: true, min: 1 },
     verse: { type: Number, required: true, min: 1 },
     text: { type: String, required: true },
+    paragraphStart: { type: Boolean, required: true, default: false },
   },
   { timestamps: true, versionKey: false },
 );

@@ -1,3 +1,10 @@
+import {
+  conversationDetailResponseSchema,
+  conversationsListResponseSchema,
+  startConversationResponseSchema,
+  transcribeResponseSchema,
+  turnResponseSchema,
+} from "@discern/shared";
 import express, { Router } from "express";
 import { z } from "zod";
 
@@ -103,6 +110,7 @@ abigailRouter.post(
 
     sendData(
       res,
+      startConversationResponseSchema,
       {
         id: String(conversation._id),
         mode: conversation.mode,
@@ -138,7 +146,7 @@ abigailRouter.post(
     });
     await persistTurn(userId, conversation._id, body.content, result);
 
-    sendData(res, {
+    sendData(res, turnResponseSchema, {
       reply: result.reply,
       safetyIntercepted: result.safetyIntercepted,
       citations: result.citations.map((c) => c.ref),
@@ -270,7 +278,7 @@ abigailRouter.post(
       "input.webm",
     );
 
-    sendData(res, {
+    sendData(res, transcribeResponseSchema, {
       text: result.text,
       seconds: result.seconds,
       ...(result.refusedReason ? { refusedReason: result.refusedReason } : {}),
@@ -327,7 +335,7 @@ abigailRouter.get(
       byConversation.set(key, [...(byConversation.get(key) ?? []), m]);
     }
 
-    sendData(res, {
+    sendData(res, conversationsListResponseSchema, {
       conversations: page.map((conversation) => {
         const rows = byConversation.get(String(conversation._id)) ?? [];
         const firstFromThem = rows.find((m) => m.role === "user");
@@ -373,7 +381,7 @@ abigailRouter.get(
       .sort({ createdAt: 1 })
       .lean();
 
-    sendData(res, {
+    sendData(res, conversationDetailResponseSchema, {
       id: String(conversation._id),
       mode: conversation.mode,
       startedAt: conversation.startedAt.toISOString(),

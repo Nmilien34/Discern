@@ -4,6 +4,7 @@
 // old device means Abigail forgets what she already worked out about someone.
 
 import type { StageSlug } from "@discern/shared";
+import type { StageEnteredBy } from "@discern/shared";
 import { STAGE_ENTERED_BY, STAGE_SLUGS } from "@discern/shared";
 import mongoose, { Schema } from "mongoose";
 import type { Document, Types } from "mongoose";
@@ -14,7 +15,7 @@ export interface UserStageDocument extends Document<Types.ObjectId> {
   userId: Types.ObjectId;
   stageSlug: StageSlug;
   enteredAt: Date;
-  enteredBy: "abigail" | "user";
+  enteredBy: StageEnteredBy;
   /**
    * Why this stage was named.
    *

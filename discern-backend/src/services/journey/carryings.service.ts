@@ -15,6 +15,7 @@ import type { Types } from "mongoose";
 
 import { env } from "../../config/env";
 import { ConflictError, NotFoundError, ValidationError } from "../../lib/errors";
+import { logger } from "../../lib/logger";
 import { parseReference } from "../../lib/reference";
 import type { CarryingDocument } from "../../models";
 import { CarryingModel, HymnModel, PassageModel } from "../../models";
@@ -187,6 +188,17 @@ export async function addCarrying(
   return hydrate(carrying);
 }
 
+/**
+ * Above this, a reported dwell is logged as suspect. NOT a limit — the value is
+ * still recorded and still scores, and `dwell_time`'s per-event cap stopped
+ * paying at 1,200 seconds anyway.
+ *
+ * Thirty minutes of unbroken foreground attention on one passage is rare and
+ * entirely real. What is not real is a lot of them, and this is the only place
+ * that pattern could ever be seen.
+ */
+export const PLAUSIBLE_DWELL_SECONDS = 1_800;
+
 export interface UpdateCarryingInput {
   note?: string;
   dwellSeconds?: number;
@@ -210,7 +222,48 @@ export async function updateCarrying(
     carrying.notes.push({ text: input.note, at: new Date() });
   }
 
+  /** Set inside the dwell branch below, and read after the save. */
+  let firstContact = false;
+
   if (input.dwellSeconds) {
+    // TELEMETRY TRIPWIRE, not a gate. The value is accepted either way.
+    //
+    // The schema rejects above an hour, which catches a client that counted
+    // while backgrounded — an overnight session arrives as eight hours and is
+    // refused. IT DOES NOT CATCH THE LIKELIER BUG. A double-count on resume
+    // produces roughly twice a believable number, so twenty real minutes
+    // arrives as forty and sails through any ceiling worth having.
+    //
+    // So anything past PLAUSIBLE_DWELL_SECONDS is recorded and logged. Half an
+    // hour of unbroken attention on one passage is rare and real; a steady
+    // stream of them from one build is a client bug, and this is the only place
+    // it would ever show.
+    if (input.dwellSeconds > PLAUSIBLE_DWELL_SECONDS) {
+      logger.warn(
+        {
+          userId: String(userId),
+          carryingId,
+          dwellSeconds: input.dwellSeconds,
+          plausibleAbove: PLAUSIBLE_DWELL_SECONDS,
+        },
+        "implausible dwell reported — accepted, but the client may be counting " +
+          "while backgrounded or double-counting on resume",
+      );
+    }
+
+    // FIRST CONTACT, DEFINED. `lastVisitedAt` is null until this branch sets
+    // it, and nothing else in the codebase writes it — so null here means THIS
+    // IS THE FIRST PATCH ON THIS CARRYING, EVER.
+    //
+    // That is the definition, and it is deliberate. Not "the first in a
+    // calendar day" and not "the first after some gap: a return means coming
+    // back to a thing you had left, and the carrying is the thing you left. You
+    // leave it once and you can come back to it many times, which is why the
+    // scope is the carrying's whole life rather than a window.
+    //
+    // Read before the write, because the write is what destroys the evidence.
+    firstContact = carrying.lastVisitedAt === null;
+
     carrying.totalDwellSeconds += input.dwellSeconds;
     carrying.revisitCount += 1;
     carrying.lastVisitedAt = new Date();
@@ -232,12 +285,24 @@ export async function updateCarrying(
       weight: input.dwellSeconds,
       sourceId: carrying._id as Types.ObjectId,
     });
-    await recordSeedEvent({
-      userId,
-      type: "revisit",
-      weight: 1,
-      sourceId: carrying._id as Types.ObjectId,
-    });
+    // A FIRST CONTACT IS NOT A RETURN, so no revisit is recorded for it.
+    //
+    // This fired on every dwell PATCH including the first, which meant 8
+    // points — more than three cultivation reads — for opening something for
+    // the first time, before anything had been left to come back to. The event
+    // is named for the rarer, harder thing; the trigger was named for nothing.
+    //
+    // THE WEIGHT IS UNCHANGED AT 8. It was presumably right for a genuine
+    // return, which is why it was set there, and this fix is about when the
+    // event fires rather than what it is worth.
+    if (!firstContact) {
+      await recordSeedEvent({
+        userId,
+        type: "revisit",
+        weight: 1,
+        sourceId: carrying._id as Types.ObjectId,
+      });
+    }
   }
 
   return hydrate(carrying);

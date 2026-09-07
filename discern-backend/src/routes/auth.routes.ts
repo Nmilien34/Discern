@@ -1,4 +1,9 @@
-import { deviceAuthRequestSchema, linkAccountRequestSchema } from "@discern/shared";
+import {
+  authResponseSchema,
+  deviceAuthRequestSchema,
+  linkAccountRequestSchema,
+  linkResponseSchema,
+} from "@discern/shared";
 import type { DeviceAuthRequest, LinkAccountRequest } from "@discern/shared";
 import { Router } from "express";
 
@@ -53,7 +58,7 @@ authRouter.post(
       { new: true, upsert: true },
     );
 
-    sendData(res, {
+    sendData(res, authResponseSchema, {
       token: issueToken(String(user._id)),
       userId: String(user._id),
       created: before === null,
@@ -101,7 +106,7 @@ authRouter.post(
       ...(identity.email ? { email: identity.email } : {}),
     });
 
-    sendData(res, {
+    sendData(res, linkResponseSchema, {
       token: issueToken(String(result.user._id)),
       userId: String(result.user._id),
       outcome: result.outcome,

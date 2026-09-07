@@ -6,7 +6,8 @@
   "main": "dist/index.js",
   "scripts": {
     "atlas:index": "tsx src/scripts/create-search-indexes.ts",
-    "build": "tsc -p tsconfig.json",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc -p tsconfig.json",
     "dev": "tsx watch src/index.ts",
     "embed": "tsx src/scripts/embed-corpus.ts",
     "eval": "tsx src/scripts/eval-abigail.ts",

@@ -157,12 +157,21 @@ describe("passive events are not farmable", () => {
     expect(REVISITS_PER_CARRYING_PER_DAY).toBe(1);
   });
 
-  it("leaves the ACTIVE types uncapped", () => {
-    // These cannot be produced by clicking, and someone who genuinely repaired
-    // two relationships in one day should be credited for both.
+  it("leaves uncapped only the types bounded by something other than a day", () => {
+    // Someone who genuinely repaired two relationships in one day should be
+    // credited for both, and neither of these can be produced by clicking:
+    // they are deduped once-ever on {userId, type, sourceId} by a unique index,
+    // so their lifetime totals are set by how much content exists.
     expect(SEED_DAILY_CAPS.action_taken).toBeUndefined();
-    expect(SEED_DAILY_CAPS.premise_reframed).toBeUndefined();
     expect(SEED_DAILY_CAPS.stage_movement).toBeUndefined();
+    expect(SEED_DAILY_CAPS.read_completed).toBeUndefined();
+
+    // premise_reframed IS CAPPED as of 2026-09-07, and it is not an exception —
+    // it is the standing rule written beside SEED_DAILY_CAPS: any event gated
+    // by a model's judgement is capped, whether or not anyone has shown it can
+    // be forced. It was uncapped and firing on ~70% of turns, which put 2,250
+    // points a day in reach of a heavy user with no bad intent at all.
+    expect(SEED_DAILY_CAPS.premise_reframed).toBe(15);
   });
 
   it("puts Shelter about a year out, not two months", () => {

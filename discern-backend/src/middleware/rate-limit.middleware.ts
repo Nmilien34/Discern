@@ -170,6 +170,29 @@ export const deviceAuthLimiter: RequestHandler = rateLimit({
  * but the upload is not free, and a loop here spends both bandwidth and
  * ElevenLabs minutes.
  */
+/**
+ * PATCH /v1/carryings/:id — notes, dwell time, release.
+ *
+ * A CONSISTENCY FIX, NOT A SECURITY ONE, and it is worth being exact about that
+ * because the alternative reading sends someone hunting for a threat model that
+ * does not exist. There is no leaderboard, no comparison and nothing to buy
+ * with points, so the only person a forged tree deceives is its owner — and
+ * `SEED_DAILY_CAPS.dwell_time` already bounds the whole day at 20 points
+ * however many times this is called. This limiter exists because transcribe,
+ * device auth and account deletion all have one and this route did not.
+ *
+ * THE NUMBER COMES FROM A REAL CLIENT, not from an attacker. Three active
+ * carryings is the cap; the app PATCHes one when a person leaves its screen,
+ * adds a note, or releases it. A heavy day is a dozen. Sixty an hour is roughly
+ * five times the heaviest plausible use and still turns a loop into a wall.
+ */
+export const carryingUpdateLimiter: RequestHandler = rateLimit({
+  name: "carrying-update",
+  windowMs: 60 * 60 * 1000,
+  max: 60,
+  by: "user",
+});
+
 export const transcribeLimiter: RequestHandler = rateLimit({
   name: "transcribe",
   windowMs: 60 * 60 * 1000,
@@ -186,6 +209,21 @@ export const linkAuthLimiter: RequestHandler = rateLimit({
 });
 
 /** Test seam: counters are process-local, so they leak between test cases. */
+/**
+ * Account deletion. Tight, and keyed per user rather than per IP.
+ *
+ * Deletion is irreversible and re-authenticated, so the threat is not a
+ * stranger brute-forcing it — it is a loop, a stuck retry, or somebody probing
+ * identity tokens against the destructive endpoint. Three attempts an hour is
+ * more than a real person needs and far less than a script wants.
+ */
+export const deleteAccountLimiter: RequestHandler = rateLimit({
+  name: "account-delete",
+  windowMs: 60 * 60 * 1000,
+  max: 3,
+  by: "user",
+});
+
 export function resetRateLimitsForTests(): void {
   windows.clear();
 }

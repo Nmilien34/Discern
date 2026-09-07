@@ -34,6 +34,7 @@ import {
   connectToDatabase,
   disconnectFromDatabase,
 } from "../db/connect";
+import { assertWritable } from "../lib/production-guard";
 import { ConversationModel, UserModel } from "../models";
 import type { TurnResult } from "../services/abigail/pipeline";
 import { referencedPassages } from "../services/abigail/grounding";
@@ -637,6 +638,10 @@ interface SampleFailure {
 }
 
 async function main(): Promise<void> {
+  // Refuses to touch the production database without an explicit flag on
+  // this run. See lib/production-guard.ts.
+  assertWritable("eval-critical.ts");
+
   const runs = Number(argOf("--runs") ?? DEFAULT_RUNS);
   const onlyArg = argOf("--only");
   const only = onlyArg

@@ -22,6 +22,7 @@
 import { timingSafeEqual } from "node:crypto";
 
 import type { EntitlementStatus } from "@discern/shared";
+import type { WebhookResponse } from "@discern/shared";
 import { z } from "zod";
 
 import { env } from "../../config/env";
@@ -165,12 +166,10 @@ function isUsableAppUserId(id: string): boolean {
   return id.length > 0 && !id.startsWith("$RCAnonymousID:");
 }
 
-export interface WebhookResult {
-  received: true;
-  duplicate: boolean;
-  mutatedEntitlement: boolean;
-  userFound: boolean;
-}
+// WebhookResult was a hand-written interface here. It is now inferred from
+// `webhookResponseSchema` in @discern/shared, so the type and the runtime
+// contract are the same object and cannot drift.
+export type WebhookResult = WebhookResponse;
 
 export async function applyRevenueCatWebhook(
   payload: RevenueCatWebhook,

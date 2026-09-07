@@ -16,6 +16,7 @@ import {
   connectToDatabase,
   disconnectFromDatabase,
 } from "../db/connect";
+import { assertWritable } from "../lib/production-guard";
 import { logger } from "../lib/logger";
 import { AuthorModel, BookModel, TranslationModel } from "../models";
 import { AUTHOR_SEEDS } from "./data/authors";
@@ -155,6 +156,10 @@ async function seedBooks(authorIdByBookSlug: Map<string, string>): Promise<void>
 }
 
 async function main(): Promise<void> {
+  // Refuses to touch the production database without an explicit flag on
+  // this run. See lib/production-guard.ts.
+  assertWritable("seed-corpus.ts");
+
   await connectToDatabase();
   assertCorpusWritable("seed-corpus");
 

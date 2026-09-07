@@ -1,4 +1,9 @@
-import { enterStageRequestSchema } from "@discern/shared";
+import {
+  currentStageResponseSchema,
+  enterStageRequestSchema,
+  seedLedgerResponseSchema,
+  seedResponseSchema,
+} from "@discern/shared";
 import type { StageSlug } from "@discern/shared";
 import { Router } from "express";
 
@@ -9,7 +14,6 @@ import { validateBody } from "../middleware/validate.middleware";
 import {
   enterStage,
   getCurrentStage,
-  listStages,
 } from "../services/journey/stages.service";
 import { computeSeed, growthArc, readLedger } from "../services/journey/seed.service";
 
@@ -20,30 +24,16 @@ export const journeyRouter: Router = Router();
 // ARCHITECTURE.md §10 decision 3 (corrected) removed that carve-out.
 
 /** The seven stages themselves. Public config; no auth needed. */
-journeyRouter.get(
-  "/stages",
-  asyncHandler(async (_req, res) => {
-    const stages = await listStages();
-    sendData(res, {
-      stages: stages.map((stage) => ({
-        slug: stage.slug,
-        order: stage.order,
-        from: stage.from,
-        to: stage.to,
-        description: stage.description,
-        anchorPassages: stage.anchorPassages,
-        openingQuestions: stage.openingQuestions,
-      })),
-    });
-  }),
-);
+// GET /stages moved to routes/stages.routes.ts — it must be reachable before
+// the paywall, because onboarding needs it. See app.ts.
+
 
 journeyRouter.get(
   "/stage",
   requireAuth,
   loadUser,
   asyncHandler(async (req, res) => {
-    sendData(res, await getCurrentStage(req.currentUser!._id));
+    sendData(res, currentStageResponseSchema, await getCurrentStage(req.currentUser!._id));
   }),
 );
 
@@ -60,6 +50,7 @@ journeyRouter.post(
     // a client that could assert "abigail said so" could fabricate a diagnosis.
     sendData(
       res,
+      currentStageResponseSchema,
       await enterStage(req.currentUser!._id, body.stageSlug, "user", body.evidence),
     );
   }),
@@ -77,7 +68,7 @@ journeyRouter.get(
   requireAuth,
   loadUser,
   asyncHandler(async (req, res) => {
-    sendData(res, await computeSeed(req.currentUser!._id));
+    sendData(res, seedResponseSchema, await computeSeed(req.currentUser!._id));
   }),
 );
 
@@ -87,9 +78,12 @@ journeyRouter.get(
   requireAuth,
   loadUser,
   asyncHandler(async (req, res) => {
-    sendData(res, {
+    sendData(res, seedLedgerResponseSchema, {
       events: await readLedger(req.currentUser!._id),
-      arc: growthArc(),
+      // Copied, not handed out. growthArc() returns the shared readonly config
+      // array; passing it directly would both fail the schema's mutable input
+      // type and give a caller a reference to configuration.
+      arc: [...growthArc()],
     });
   }),
 );

@@ -31,6 +31,7 @@ import {
   connectToDatabase,
   disconnectFromDatabase,
 } from "../db/connect";
+import { assertWritable } from "../lib/production-guard";
 import { ConversationModel, UserModel } from "../models";
 
 /** The marker that makes a tester findable, listable and revocable. */
@@ -79,6 +80,10 @@ async function list(base: string): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  // Refuses to touch the production database without an explicit flag on
+  // this run. See lib/production-guard.ts.
+  assertWritable("make-testers.ts");
+
   await connectToDatabase();
   assertCorpusWritable("make-testers");
 

@@ -1,14 +1,24 @@
 import {
+  deleteAccountRequestSchema,
+  deleteAccountResponseSchema,
+  meResponseSchema,
+  notificationPreferencesResponseSchema,
   notificationPreferencesSchema,
+  onboardingResponseSchema,
   onboardingStepSchema,
 } from "@discern/shared";
+import type { DeleteAccountRequest } from "@discern/shared";
 import { Router } from "express";
 
 import { asyncHandler } from "../lib/async-handler";
 import { sendData } from "../lib/responses";
 import { loadUser, requireAuth } from "../middleware/auth.middleware";
+import { deleteAccountLimiter } from "../middleware/rate-limit.middleware";
 import { accessViewFor } from "../middleware/require-entitlement.middleware";
 import { validateBody } from "../middleware/validate.middleware";
+import { UnauthorizedError } from "../lib/errors";
+import { deleteAccount } from "../services/users/account-deletion.service";
+import { verifyIdentityToken } from "../services/users/identity-verification";
 import { UserModel } from "../models";
 
 export const meRouter: Router = Router();
@@ -22,7 +32,7 @@ meRouter.get(
     const user = req.currentUser;
     if (!user) return;
 
-    sendData(res, {
+    sendData(res, meResponseSchema, {
       userId: String(user._id),
       accountId: user.accountId,
       email: user.email,
@@ -104,7 +114,7 @@ meRouter.put(
       { new: true },
     );
 
-    sendData(res, {
+    sendData(res, notificationPreferencesResponseSchema, {
       pushRegistered: Boolean(user?.preferences.pushToken),
       notificationTime: user?.preferences.notificationTime ?? null,
       timezone: user?.preferences.timezone ?? null,
@@ -145,11 +155,75 @@ meRouter.post(
           { new: true },
         );
 
-    sendData(res, {
+    sendData(res, onboardingResponseSchema, {
       completed: (user?.onboarding ?? []).map((s) => ({
         step: s.step,
         completedAt: s.completedAt.toISOString(),
       })),
+    });
+  }),
+);
+
+/**
+ * DELETE /v1/me — account deletion.
+ *
+ * Apple requires in-app deletion from any app that offers account creation, so
+ * this is a submission blocker rather than a feature.
+ *
+ * RE-AUTHENTICATED. A valid session token is not enough: a phone left unlocked
+ * on a table already has one. A linked account must present its provider token
+ * again, and its subject must match the account on file. An anonymous account
+ * presents its device id, because there is no provider to assert against and
+ * holding the device is the strongest claim available.
+ *
+ * IDEMPOTENT. Every step is a deleteMany, so a retry after a partial failure
+ * finishes the job instead of erroring on rows that are already gone. The user
+ * document is removed last, which is what makes a half-finished run resumable —
+ * the account is still there to be found and re-walked.
+ */
+meRouter.delete(
+  "/",
+  requireAuth,
+  loadUser,
+  deleteAccountLimiter,
+  validateBody(deleteAccountRequestSchema),
+  asyncHandler(async (req, res) => {
+    const user = req.currentUser!;
+    const body = req.body as DeleteAccountRequest;
+
+    if ("identityToken" in body) {
+      // A fresh assertion from the provider, and it has to be THIS account.
+      const identity = await verifyIdentityToken(
+        body.provider,
+        body.identityToken,
+        body.nonce,
+      );
+
+      if (!user.accountId || identity.subject !== user.accountId) {
+        throw new UnauthorizedError(
+          "That sign-in does not match the account being deleted.",
+        );
+      }
+    } else {
+      // ANONYMOUS PATH. Someone who purchased before signing up and never
+      // finished still has data, and requiring them to create an account before
+      // they may delete one would be absurd.
+      if (body.deviceId !== user.deviceId) {
+        throw new UnauthorizedError(
+          "That device does not match the account being deleted.",
+        );
+      }
+    }
+
+    const result = await deleteAccount(user._id);
+
+    sendData(res, deleteAccountResponseSchema, {
+      deletedAt: result.deletedAt,
+      removed: result.removed,
+      retained: result.retained,
+      // Apple owns the subscription; we own the account. Deleting one does not
+      // touch the other, and a person who assumes otherwise gets charged again.
+      subscriptionUnaffected: true as const,
     });
   }),
 );

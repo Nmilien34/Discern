@@ -24,6 +24,7 @@ import {
   connectToDatabase,
   disconnectFromDatabase,
 } from "../db/connect";
+import { assertWritable } from "../lib/production-guard";
 import { logger } from "../lib/logger";
 import { HymnModel, PassageModel } from "../models";
 import { embedBatch, estimateCostUsd } from "../services/corpus/embeddings";
@@ -150,6 +151,10 @@ async function embedCollection(
 }
 
 async function main(): Promise<void> {
+  // Refuses to touch the production database without an explicit flag on
+  // this run. See lib/production-guard.ts.
+  assertWritable("embed-corpus.ts");
+
   const args = parseArgs(process.argv.slice(2));
 
   await connectToDatabase();

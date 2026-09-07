@@ -13,10 +13,11 @@
 import mongoose from "mongoose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { UserModel } from "../models";
+import { SpeechUsageModel, UserModel } from "../models";
 import {
   assertOwnedCollectionsRegistered,
   linkAccount,
+  moveOwnedDocumentsForTest,
   ownedCollectionLabels,
   registerOwnedCollection,
   resolveSurvivingUser,
@@ -41,9 +42,16 @@ let unregister: (() => void) | undefined;
 
 beforeAll(async () => {
   try {
+    // ITS OWN DATABASE. account-deletion.test.ts wipes speechUsage wholesale in
+    // its beforeEach — correctly, for what it tests — and vitest runs files in
+    // parallel, so sharing one database means that wipe lands in the middle of
+    // these assertions. A flake that looks like a bug in the merge.
     await mongoose.connect(
       process.env.MONGODB_URI ?? "mongodb://127.0.0.1:27017/discern-test",
-      { serverSelectionTimeoutMS: 2500 },
+      {
+        dbName: `${process.env.MONGODB_DB_NAME ?? "discern-test"}-link`,
+        serverSelectionTimeoutMS: 2500,
+      },
     );
     connected = true;
   } catch {
@@ -224,7 +232,74 @@ describe("owned-collection registry", () => {
         "messages",
         "safetyEvents",
         "userMemory",
+        "processedWebhookEvents",
+        "speechUsage",
+        "journalEntries",
       ]),
     ).not.toThrow();
+  });
+});
+
+describe("the speech ceiling no longer resets on link", () => {
+  it("ADDS the absorbed user's spend to the survivor's, day by day", async () => {
+    // It used to be `merge: "skip"`, which handed somebody a fresh 40,000
+    // characters mid-day: spend most of your allowance anonymously, sign in,
+    // and the survivor's scope started from zero. Repeatable, ~$12 each time.
+    const from = new mongoose.Types.ObjectId();
+    const to = new mongoose.Types.ObjectId();
+    const day = "2026-09-07";
+
+    await SpeechUsageModel.create({
+      scope: `user:${String(from)}`, day,
+      charactersSynthesized: 30_000, requests: 12, scriptureCharacters: 30_000,
+    });
+    await SpeechUsageModel.create({
+      scope: `user:${String(to)}`, day,
+      charactersSynthesized: 5_000, requests: 3, scriptureCharacters: 5_000,
+    });
+
+    await moveOwnedDocumentsForTest(from, to);
+
+    const survivor = await SpeechUsageModel.findOne({ scope: `user:${String(to)}`, day });
+    expect(survivor?.charactersSynthesized).toBe(35_000);
+    expect(survivor?.requests).toBe(15);
+    // And the absorbed rows are gone, so nothing is counted twice on a re-run.
+    expect(await SpeechUsageModel.countDocuments({ scope: `user:${String(from)}` })).toBe(0);
+  });
+
+  it("creates a day the survivor never spent on, rather than dropping it", async () => {
+    // The reason this cannot be an updateMany.
+    const from = new mongoose.Types.ObjectId();
+    const to = new mongoose.Types.ObjectId();
+
+    await SpeechUsageModel.create({
+      scope: `user:${String(from)}`, day: "2026-09-05", charactersSynthesized: 1_200, requests: 2,
+    });
+
+    await moveOwnedDocumentsForTest(from, to);
+
+    const created = await SpeechUsageModel.findOne({ scope: `user:${String(to)}`, day: "2026-09-05" });
+    expect(created?.charactersSynthesized).toBe(1_200);
+  });
+
+  it("never reparents, because {scope, day} is unique and E11000 fails the merge", async () => {
+    // Both devices spoke on the same day. A reparent here is a guaranteed
+    // duplicate key, and a failed merge leaves someone signed in to an account
+    // that does not contain their life.
+    const from = new mongoose.Types.ObjectId();
+    const to = new mongoose.Types.ObjectId();
+    const day = "2026-09-06";
+    await SpeechUsageModel.create({ scope: `user:${String(from)}`, day, charactersSynthesized: 100 });
+    await SpeechUsageModel.create({ scope: `user:${String(to)}`, day, charactersSynthesized: 100 });
+
+    // Scoped to these two users. Counting every row for the day would also
+    // count what the other tests in this file wrote, which is what made this
+    // pass alone and fail in a full run.
+    await expect(moveOwnedDocumentsForTest(from, to)).resolves.toBeDefined();
+    expect(await SpeechUsageModel.countDocuments({ scope: `user:${String(from)}` })).toBe(0);
+    const survivor = await SpeechUsageModel.findOne({ scope: `user:${String(to)}`, day });
+    // 100 + 100, added rather than moved. A reparent here would have been
+    // E11000 and would have failed the whole merge.
+    expect(survivor?.charactersSynthesized).toBe(200);
   });
 });

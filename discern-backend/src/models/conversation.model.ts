@@ -1,3 +1,4 @@
+import type { ConversationMode } from "@discern/shared";
 // ARCHITECTURE.md §6, `conversations`. USER-OWNED — registered in OWNED_COLLECTIONS.
 
 import mongoose, { Schema } from "mongoose";
@@ -7,7 +8,7 @@ import { applyApiTransforms } from "./model-utils";
 
 export interface ConversationDocument extends Document<Types.ObjectId> {
   userId: Types.ObjectId;
-  mode: "text" | "voice";
+  mode: ConversationMode;
   startedAt: Date;
   endedAt: Date | null;
   /** Stages Abigail noticed evidence for, without necessarily naming one. */

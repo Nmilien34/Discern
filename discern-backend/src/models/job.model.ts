@@ -19,18 +19,15 @@
 // because a queue that retries a poisoned job until the end of time is how a
 // worker looks healthy while doing nothing.
 
+import { JOB_TYPES } from "@discern/shared";
+import type { JobType } from "@discern/shared";
 import { Schema, model } from "mongoose";
 import type { Document, Model, Types } from "mongoose";
 
-export const JOB_TYPES = [
-  "embedding-backfill",
-  "tts-pregenerate",
-  "memory-summarize",
-  "notification-schedule",
-  "notification-send",
-] as const;
-
-export type JobType = (typeof JOB_TYPES)[number];
+// JOB_TYPES moved to @discern/shared so the job-health contract can enumerate
+// it. Re-exported here because every existing import reads it from this module.
+export { JOB_TYPES };
+export type { JobType };
 
 export const JOB_STATUSES = ["queued", "running", "done", "failed"] as const;
 export type JobStatus = (typeof JOB_STATUSES)[number];

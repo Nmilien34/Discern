@@ -19,6 +19,7 @@ import {
   pointsForEvent,
   REVISITS_PER_CARRYING_PER_DAY,
   SEED_DAILY_CAPS,
+  vigorFor,
 } from "../../config/seed-growth";
 import { logger } from "../../lib/logger";
 import { SeedEventModel } from "../../models";
@@ -50,9 +51,30 @@ export async function recordSeedEvent(
       sourceId: input.sourceId ?? null,
     });
   } catch (error) {
+    // A DUPLICATE IS THE INDEX DOING ITS JOB, NOT A FAILURE. read_completed,
+    // action_taken and stage_movement are unique on {userId, type, sourceId};
+    // two concurrent requests both pass the services' `exists` check and both
+    // insert, and the loser of that race gets E11000. The row it wanted already
+    // exists, which is the outcome that was wanted, so this is silent.
+    if ((error as { code?: number }).code === 11000) return;
+
+    // EVERYTHING ELSE IS LOUD, and stays swallowed on purpose: a ledger write
+    // that fails must not fail the user's action — they did the thing, and
+    // refusing their apology because a points row would not save is the wrong
+    // trade. But it was logged at `error` with only the type, which in practice
+    // is a line nobody can act on. It now carries who and what, so a pattern is
+    // visible rather than merely present.
     logger.error(
-      { err: error instanceof Error ? error.message : error, type: input.type },
-      "failed to append seed event",
+      {
+        err: error instanceof Error ? error.message : error,
+        type: input.type,
+        userId: String(input.userId),
+        sourceId: input.sourceId ? String(input.sourceId) : null,
+        weight: input.weight,
+      },
+      "FAILED TO APPEND SEED EVENT — the user's action succeeded and their " +
+        "ledger did not. This is silent to them by design and must not be " +
+        "silent here.",
     );
   }
 }
@@ -66,7 +88,11 @@ export async function recordSeedEvent(
  * change a weight, and every user's seed is correct on the next request, with no
  * migration and no recomputation job.
  */
-export async function computeSeed(userId: Types.ObjectId): Promise<SeedResponse> {
+export async function computeSeed(
+  userId: Types.ObjectId,
+  /** Injectable so the vigor curve is testable without waiting a month. */
+  now: Date = new Date(),
+): Promise<SeedResponse> {
   const events = await SeedEventModel.find({ userId })
     .select("type weight at sourceId")
     .sort({ at: 1 })
@@ -133,6 +159,14 @@ export async function computeSeed(userId: Types.ObjectId): Promise<SeedResponse>
   const first = events[0];
   const last = events[events.length - 1];
 
+  // THE SECOND AXIS. Days since the last real event, whole days, floored at
+  // zero so a clock skew cannot produce a negative. No events at all is null,
+  // which vigorFor reads as FULL — a person who just arrived has neglected
+  // nothing.
+  const daysSinceTended = last
+    ? Math.max(0, Math.floor((now.getTime() - last.at.getTime()) / 86_400_000))
+    : null;
+
   return {
     growthStage: current.stage,
     growthStageLabel: current.label,
@@ -142,6 +176,7 @@ export async function computeSeed(userId: Types.ObjectId): Promise<SeedResponse>
     pointsToNextStage:
       next === null ? null : Math.max(0, Math.round((next.threshold - points) * 100) / 100),
     progressInStage: Math.round(progressInStage * 1000) / 1000,
+    vigor: vigorFor(daysSinceTended),
     eventCount: events.length,
     contributions: [...byType.entries()]
       .map(([type, bucket]) => ({

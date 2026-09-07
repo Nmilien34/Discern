@@ -20,6 +20,7 @@ import {
   connectToDatabase,
   disconnectFromDatabase,
 } from "../db/connect";
+import { assertWritable } from "../lib/production-guard";
 import { ConversationModel, UserModel } from "../models";
 import { persistTurn, runTurn } from "../services/abigail/pipeline";
 
@@ -197,6 +198,10 @@ function costOf(model: string, tokensIn: number, tokensOut: number): number {
 }
 
 async function main(): Promise<void> {
+  // Refuses to touch the production database without an explicit flag on
+  // this run. See lib/production-guard.ts.
+  assertWritable("eval-abigail.ts");
+
   const onlyArg = process.argv.indexOf("--only");
   const only =
     onlyArg === -1

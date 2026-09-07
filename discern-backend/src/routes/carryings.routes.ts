@@ -1,5 +1,8 @@
 import {
+  carryingSchema,
+  carryingsListResponseSchema,
   createCarryingRequestSchema,
+  passageAudioResponseSchema,
   updateCarryingRequestSchema,
 } from "@discern/shared";
 import { Router } from "express";
@@ -8,6 +11,7 @@ import { asyncHandler } from "../lib/async-handler";
 import { NotFoundError } from "../lib/errors";
 import { sendData } from "../lib/responses";
 import { loadUser, requireAuth } from "../middleware/auth.middleware";
+import { carryingUpdateLimiter } from "../middleware/rate-limit.middleware";
 import { validateBody } from "../middleware/validate.middleware";
 import { CarryingModel, PassageModel } from "../models";
 import { passageAudio } from "../services/speech/passage-audio";
@@ -32,6 +36,7 @@ carryingsRouter.get(
 
     sendData(
       res,
+      carryingsListResponseSchema,
       await listCarryings(req.currentUser!._id, {
         ...(Number.isInteger(limit) && limit >= 0
           ? { releasedLimit: Math.min(limit, 200) }
@@ -48,20 +53,26 @@ carryingsRouter.post(
   loadUser,
   validateBody(createCarryingRequestSchema),
   asyncHandler(async (req, res) => {
-    const body = req.body as {
-      kind: "passage" | "hymn";
-      reference: string;
-      source: "abigail" | "self";
-      why?: string;
-    };
+    const body = req.body as { kind: "passage" | "hymn"; reference: string };
 
     sendData(
       res,
+      carryingSchema,
       await addCarrying(req.currentUser!._id, {
         kind: body.kind,
         reference: body.reference,
-        source: body.source,
-        ...(body.why ? { why: body.why } : {}),
+        // HARDCODED, LIKE enterStage's "user" AT journey.routes.ts:53.
+        //
+        // This route is the client asking for something. The only way a
+        // carrying can be Abigail's is the `offer_carrying` tool call in her
+        // pipeline, which passes "abigail" and her own reason. A client that
+        // could set this could claim she chose a passage for them and say why
+        // she did — in an app whose whole premise is that she noticed something
+        // they had not.
+        source: "self",
+        // AND NO `why`. It is not withheld, it does not exist: "why she gave
+        // you this" is a sentence only she can write, and a self-added carrying
+        // has nothing to put there.
       }),
       201,
     );
@@ -73,6 +84,7 @@ carryingsRouter.patch(
   "/:id",
   requireAuth,
   loadUser,
+  carryingUpdateLimiter,
   validateBody(updateCarryingRequestSchema),
   asyncHandler(async (req, res) => {
     const body = req.body as {
@@ -83,6 +95,7 @@ carryingsRouter.patch(
 
     sendData(
       res,
+      carryingSchema,
       await updateCarrying(req.currentUser!._id, String(req.params.id), body),
     );
   }),
@@ -127,6 +140,6 @@ carryingsRouter.get(
 
     if (!audio) throw new NotFoundError("That passage cannot be read aloud.");
 
-    sendData(res, audio);
+    sendData(res, passageAudioResponseSchema, audio);
   }),
 );

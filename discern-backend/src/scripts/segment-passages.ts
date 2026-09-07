@@ -22,6 +22,7 @@ import {
   connectToDatabase,
   disconnectFromDatabase,
 } from "../db/connect";
+import { assertWritable } from "../lib/production-guard";
 import { logger } from "../lib/logger";
 import { formatReference } from "../lib/reference";
 import { BookModel, PassageModel, TranslationModel, VerseModel } from "../models";
@@ -39,6 +40,10 @@ function parseArgs(argv: string[]): { only?: string[] } {
 }
 
 async function main(): Promise<void> {
+  // Refuses to touch the production database without an explicit flag on
+  // this run. See lib/production-guard.ts.
+  assertWritable("segment-passages.ts");
+
   const args = parseArgs(process.argv.slice(2));
 
   // Fail before writing anything. Two curated ranges claiming the same verse
