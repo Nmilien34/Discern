@@ -127,7 +127,25 @@ export function isDatabaseReachable(): boolean {
  * committed under src/db/search-indexes/, and their absence must warn rather
  * than crash — most of Discern works without them; only retrieval does.
  */
-export async function syncIndexes(): Promise<void> {
+/**
+ * Creates every index the schemas declare. NAMED FOR WHAT IT IS, since
+ * 2026-09-07.
+ *
+ * It was called `syncIndexes` and calls `createIndexes()`, which is not the
+ * same thing: Mongoose's own `syncIndexes()` DROPS indexes the schema does not
+ * declare, and this never removes anything. The name promised pruning it does
+ * not do.
+ *
+ * The difference mattered once already. When a unique index was applied to
+ * production ahead of the code that understood it, the question of whether the
+ * OLD build would drop it on its next boot decided whether the exposure was
+ * transient or persistent. It was persistent, because of this line — which was
+ * the right behaviour under a misleading name.
+ *
+ * Keep it creating rather than syncing. A deploy that silently drops an index
+ * somebody added by hand is a worse failure than one that leaves a spare.
+ */
+export async function createDeclaredIndexes(): Promise<void> {
   const names = Object.keys(mongoose.models);
 
   if (names.length === 0) {

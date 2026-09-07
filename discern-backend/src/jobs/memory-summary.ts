@@ -84,6 +84,7 @@ export async function summarizeYesterday(userId: string): Promise<number> {
     userId,
     startedAt: { $gte: since },
   })
+    .sort({ startedAt: -1 })
     .select("_id")
     .lean();
 
@@ -130,7 +131,21 @@ export async function summarizeYesterday(userId: string): Promise<number> {
       .map((t) => t.trim())
       .filter((t) => t.length > 0)
       .slice(0, MAX_OPEN_THREADS)
-      .map((text) => ({ text, at: new Date() }));
+      // THE WAY BACK IN, attributed to the MOST RECENT conversation in the
+      // window.
+      //
+      // The summariser is given one transcript spanning up to 36 hours and
+      // returns a flat list of strings, so it does not say which conversation
+      // each thread came out of. The most recent one is the best single answer
+      // available without changing what she is asked to produce, and it is
+      // right whenever there was one conversation — which is the common case.
+      //
+      // IT CAN BE WRONG when someone talked twice in a day about different
+      // things. The honest version is per-thread attribution, which means
+      // marking conversations in the transcript and asking the summariser to
+      // return an id alongside each thread. That is a change to her prompt and
+      // therefore a separate decision, not a detail to slip in here.
+      .map((text) => ({ text, at: new Date(), conversationId: conversations[0]!._id }));
 
     // REPLACE, not append. Re-running produces the same memory, and yesterday's
     // threads do not pile up into a list nobody reads.

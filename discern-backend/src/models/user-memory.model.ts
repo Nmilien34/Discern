@@ -39,6 +39,23 @@ export interface MemoryPassageGiven {
 export interface MemoryThread {
   text: string;
   at: Date;
+  /**
+   * The conversation this thread came out of, so there is a way back in.
+   *
+   * ADDED 2026-09-07. Abigail's tab lists open threads as tappable and Home's
+   * *Continue with Abigail* resumes one, and neither was buildable while a
+   * thread was `{ text, at }` — the design promised a door and the shape had
+   * none. The field was precedented eleven lines up: `MemoryPassageGiven` has
+   * carried a `conversationId` since it was written. It was simply never added
+   * here.
+   *
+   * NULL FOR ANYTHING WRITTEN BEFORE THAT DATE, AND NOT BACKFILLED. The nightly
+   * job replaces `openThreads` wholesale rather than appending, so every old
+   * thread is rewritten within a day; a backfill would be guesswork with a
+   * shelf life of hours. The endpoint returns the null and the client renders
+   * text with no way in, which is what it honestly is.
+   */
+  conversationId: Types.ObjectId | null;
 }
 
 export interface UserMemoryDocument extends Document<Types.ObjectId> {
@@ -89,6 +106,11 @@ const threadSchema = new Schema<MemoryThread>(
   {
     text: { type: String, required: true, trim: true },
     at: { type: Date, required: true, default: () => new Date() },
+    conversationId: {
+      type: Schema.Types.ObjectId,
+      ref: "Conversation",
+      default: null,
+    },
   },
   { _id: false },
 );

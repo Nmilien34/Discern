@@ -8,7 +8,7 @@
 // is deployed" can be reconciled by running one command, rather than by someone
 // remembering what they typed into a dashboard.
 //
-// These are NOT Mongoose indexes and syncIndexes() does not build them — Atlas
+// These are NOT Mongoose indexes and createDeclaredIndexes() does not build them — Atlas
 // Search is a separate subsystem with its own API. Against a local mongod this
 // fails, by design and unavoidably: the feature does not exist there.
 //

@@ -10,8 +10,24 @@
 // carryings, conversations and memory all hang off this _id, and the one
 // unforgivable bug in this app is losing them. See services/users/account-link.
 
-import type { EntitlementStatus, LinkProvider } from "@discern/shared";
-import { ENTITLEMENT_STATUSES, LINK_PROVIDERS } from "@discern/shared";
+import type {
+  EntitlementStatus,
+  LinkProvider,
+  OnboardingBrought,
+  OnboardingFamiliarity,
+  OnboardingTimeAvailable,
+  StageSlug,
+  TypeSize,
+} from "@discern/shared";
+import {
+  ENTITLEMENT_STATUSES,
+  LINK_PROVIDERS,
+  ONBOARDING_BROUGHT,
+  ONBOARDING_FAMILIARITY,
+  ONBOARDING_TIME_AVAILABLE,
+  STAGE_SLUGS,
+  TYPE_SIZES,
+} from "@discern/shared";
 import mongoose, { Schema } from "mongoose";
 import type { Document, Types } from "mongoose";
 
@@ -80,10 +96,19 @@ export interface UserPreferencesDocument {
    */
   speakReplies: boolean | null;
   voiceEnabled: boolean;
+  typeSize: TypeSize;
 }
 
 export interface UserDocument extends Document<Types.ObjectId> {
   deviceId: string;
+  /**
+   * What she calls them, from onboarding screen 3.
+   *
+   * Separate from `onboardingAnswers.name` on purpose: the answer is what they
+   * typed during onboarding, this is what the app uses now. They start equal
+   * and diverge the moment someone changes it in Settings.
+   */
+  name: string | null;
   /** Provider subject, once linked. Null while anonymous. */
   accountId: string | null;
   accountProvider: LinkProvider | null;
@@ -119,6 +144,7 @@ export interface UserDocument extends Document<Types.ObjectId> {
    * seconds, before anything good has happened.
    */
   onboarding: OnboardingStepDocument[];
+  onboardingAnswers: OnboardingAnswersDocument;
   lastActiveAt: Date;
   /** Enforces at most one notification a day. Null until the first one. */
   lastNotifiedAt: Date | null;
@@ -150,6 +176,17 @@ const entitlementSchema = new Schema<UserEntitlementDocument>(
   { _id: false },
 );
 
+export interface OnboardingAnswersDocument {
+  name: string | null;
+  brought: OnboardingBrought | null;
+  vices: StageSlug[];
+  firstVice: StageSlug | null;
+  situation: string | null;
+  person: string | null;
+  familiarity: OnboardingFamiliarity | null;
+  timeAvailable: OnboardingTimeAvailable | null;
+}
+
 const preferencesSchema = new Schema<UserPreferencesDocument>(
   {
     translationId: {
@@ -162,6 +199,47 @@ const preferencesSchema = new Schema<UserPreferencesDocument>(
     pushToken: { type: String, default: null },
     speakReplies: { type: Boolean, default: null },
     voiceEnabled: { type: Boolean, required: true, default: false },
+    typeSize: { type: String, enum: TYPE_SIZES, required: true, default: "medium" },
+  },
+  { _id: false },
+);
+
+/**
+ * WHAT SOMEONE SAID DURING ONBOARDING. PRODUCT DATA, NOT JOURNAL DATA.
+ *
+ * The distinction is written here rather than left to inference, because both
+ * are things a person typed about themselves and only one of them never leaves.
+ *
+ *   The JOURNAL is what someone writes for themselves. It never reaches
+ *   Abigail — not summarised, not retrieved, not referenced, not embedded — and
+ *   that is enforced by a lint rule, a models barrel that will not export it,
+ *   and a test written before the feature. See models/journal-entry.model.ts.
+ *
+ *   THESE are what someone told the product in order to be given the right
+ *   thing. They MAY inform the path, the starting virtue, and Abigail's
+ *   context. That is what they are for, and onboarding screen 9 says so out
+ *   loud: "She will have it when you talk."
+ *
+ * So the journal's rules do not extend here and were never meant to. What DOES
+ * extend is sensitivity: round 15 ruled the vice selection sensitive, so it is
+ * listed under "what she remembers", it is deletable there, and it carries a
+ * privacy-policy line.
+ *
+ * ACCUMULATES, never replaced wholesale. Someone who quits at screen 9 and
+ * comes back has nine screens of answers, and a later screen cannot clear an
+ * earlier answer by omitting it.
+ */
+const onboardingAnswersSchema = new Schema<OnboardingAnswersDocument>(
+  {
+    name: { type: String, default: null, trim: true },
+    brought: { type: String, enum: ONBOARDING_BROUGHT, default: null },
+    // Stage slugs, not vice words: `resolveStartingStage()` already takes these.
+    vices: { type: [String], enum: STAGE_SLUGS, required: true, default: [] },
+    firstVice: { type: String, enum: STAGE_SLUGS, default: null },
+    situation: { type: String, default: null },
+    person: { type: String, default: null, trim: true },
+    familiarity: { type: String, enum: ONBOARDING_FAMILIARITY, default: null },
+    timeAvailable: { type: String, enum: ONBOARDING_TIME_AVAILABLE, default: null },
   },
   { _id: false },
 );
@@ -174,7 +252,13 @@ const userSchema = new Schema<UserDocument>(
     email: { type: String, default: null, trim: true, lowercase: true },
     entitlement: { type: entitlementSchema, required: true, default: () => ({}) },
     currentStageSlug: { type: String, default: null },
+    name: { type: String, default: null, trim: true },
     preferences: { type: preferencesSchema, required: true, default: () => ({}) },
+    onboardingAnswers: {
+      type: onboardingAnswersSchema,
+      required: true,
+      default: () => ({}),
+    },
     abigailConversationsStarted: { type: Number, required: true, default: 0, min: 0 },
     mergedIntoUserId: { type: Schema.Types.ObjectId, ref: "User", default: null },
     onboarding: {

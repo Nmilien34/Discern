@@ -1,4 +1,4 @@
-// Registering every model in one place means db/connect.ts:syncIndexes() sees
+// Registering every model in one place means db/connect.ts:createDeclaredIndexes() sees
 // all of them at boot, rather than whichever ones a request happened to import.
 
 export * from "./author.model";
@@ -25,7 +25,7 @@ export * from "./verse.model";
 
 // THE JOURNAL IS IMPORTED FOR SIDE EFFECT AND DELIBERATELY NOT RE-EXPORTED.
 //
-// It has to be here so syncIndexes() sees its three indexes at boot, like every
+// It has to be here so createDeclaredIndexes() sees its three indexes at boot, like every
 // other model. It must NOT be `export *`, because that would make
 // `import { JournalEntryModel } from "../models"` compile inside the prompt and
 // retrieval code — and the promise that the journal never reaches Abigail is

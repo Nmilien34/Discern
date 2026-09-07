@@ -5,11 +5,12 @@ import { env } from "./config/env";
 import {
   connectToDatabase,
   disconnectFromDatabase,
-  syncIndexes,
+  createDeclaredIndexes,
 } from "./db/connect";
 import { buildInfo } from "./lib/build-info";
 import { logger } from "./lib/logger";
-// Registers every model with mongoose before syncIndexes() looks for them.
+// Registers every model with mongoose before createDeclaredIndexes() looks
+// for them.
 // Without this the index build silently finds nothing on a process that has not
 // yet handled a request touching each collection.
 import "./models";
@@ -17,7 +18,7 @@ import "./models";
 async function main(): Promise<void> {
   // Asserts the resolved database name and refuses to start if it is wrong.
   await connectToDatabase();
-  await syncIndexes();
+  await createDeclaredIndexes();
 
   const app = createApp();
   const build = buildInfo("discern-api");
